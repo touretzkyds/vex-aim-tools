@@ -5,53 +5,8 @@ import cv2
 from . import aim
 from .evbase import EventRouter
 from .events import *
-
-class Actuator():
-    def __init__(self, robot, name, stop_fn = lambda : None):
-        self.robot = robot
-        self.name = name
-        self.holder = None
-        self.stop_fn = stop_fn
-
-    def __repr__(self):
-        return f"<Actuator {self.name}>"
-
-    def lock(self, node):
-        if self.holder is None:
-            self.holder = node
-            return True
-        else:
-            return False
-
-    def complete(self):
-        print(f"{self.name} completes, holder {self.holder}")
-        if self.holder:
-            self.holder.complete()
-        self.holder = None
-
-class DriveActuator(Actuator):
-    def __init__(self, robot):
-        super().__init__(robot, 'drive')
-
-    def stop(self):
-        self.robot.robot0.stop_drive()
-
-class SoundActuator(Actuator):
-    def __init__(self, robot):
-        super().__init__(robot, 'sound')
-
-class KickActuator(Actuator):
-    def __init__(self, robot):
-        super().__init__(robot, 'kick')
-
-class LEDsActuator(Actuator):
-    def __init__(self, robot):
-        super().__init__(robot, 'leds')
-
-    def stop(self):
-        self.robot.robot0.clear_leds()
-
-#================================================================
+from .actuators import *
+from .aruco import *
 
 class Robot():
     def __init__(self, robot0=None, loop=None):
@@ -59,6 +14,7 @@ class Robot():
             robot0 = aim.Robot()
         self.robot0 = robot0
         self.loop = loop
+        self.status = self.robot0._ws_status_thread.current_status['robot']
         acts = [DriveActuator(self), SoundActuator(self), KickActuator(self), LEDsActuator(self)]
         self.actuators = {act.name : act for act in acts}
         self.erouter = EventRouter()
@@ -74,7 +30,9 @@ class Robot():
         self.loop.call_soon_threadsafe(self.status_update)
 
     def status_update(self):
+        self.old_status = self.status
         self.status = self.robot0._ws_status_thread.current_status['robot']
+        self.update_actuators()
         t = self.status['touch_flags']
         if self.touch != t:
             print(f"status_update in {threading.current_thread().native_id}")
@@ -84,13 +42,14 @@ class Robot():
                                      self.status['touch_y'],
                                      self.status['touch_flags'])
             self.erouter.post(touch_event)
-        if not self.robot0.is_driving():
-            drive_act = self.actuators['drive']
-            if drive_act.holder is not None:
-                drive_act.complete()
+
+    def update_actuators(self):
+        for act in self.actuators.values():
+            act.status_update()
 
     def image_callback(self):
         ws = self.robot0._ws_img_thread
         image_bytes = ws.image_list[ws._next_image_index]
         image_array = np.frombuffer(image_bytes, dtype='uint8')
         self.camera_image = cv2.imdecode(image_array, cv2.IMREAD_UNCHANGED)
+        # aruco detection goes here

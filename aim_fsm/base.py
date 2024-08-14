@@ -7,7 +7,7 @@
 
 from .trace import TRACE
 from .evbase import Event, EventListener
-#from .events import CompletionEvent, SuccessEvent, FailureEvent, DataEvent
+from .events import CompletionEvent, SuccessEvent, FailureEvent, DataEvent
 
 class StateNode(EventListener):
     """Base class for state nodes; does nothing."""

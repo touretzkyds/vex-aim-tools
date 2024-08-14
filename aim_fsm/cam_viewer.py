@@ -73,7 +73,7 @@ class CamViewer():
                 cv2.line(annotated_im, (0,int(shape[0]/2)), (shape[1],int(shape[0]/2)), (0,255,255), 1)
             image = annotated_im
         """
-        image = raw
+        image = raw.copy()
         for obj in self.robot.robot0.status['aivision']['objects']['items']:
             name = obj['name']
             if name == 'Ball':
@@ -92,7 +92,7 @@ class CamViewer():
                           color,
                           1) 
         #cv2.rectangle(image, (635,475), (639,479), (0,255,0), 1)
-               
+        self.robot.annotated_image = image
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, self.width, self.height, 0, GL_BGR, GL_UNSIGNED_BYTE, image)
         glutPostRedisplay()
 
@@ -168,8 +168,11 @@ class CamViewer():
             print("Use 'exit' to quit.")
             return
         if key == b'c':
-            print("Taking a snap")
-            self.capture()
+            print("Taking a raw snap")
+            self.capture_raw()
+        if key == b'C':
+            print("Taking an annotated snap")
+            self.capture_annotated()
         self.display()
 
     def specialKeyPressed(self, key, x, y):
@@ -199,11 +202,17 @@ class CamViewer():
         go_forward = GLUT_KEY_UP
         glutPostRedisplay()
 
-    def capture(self, name='robot_snap'):
+    def capture_raw(self, name='robot_snap'):
+        self.capture_image(self.robot.camera_image, name)
+
+    def capture_annotated(self, name='robot_snap'):
+        self.capture_image(self.robot.annotated_image, name)
+
+    def capture_image(self, image, name):
         global snapno, path
         if not os.path.exists(path):
                 os.makedirs(path)
-        filename = f"{path}/{name}{snapno}.png"
-        res = cv2.imwrite(filename, self.robot.camera_image)
+        filename = f"{path}{name}{snapno}.png"
+        res = cv2.imwrite(filename, image)
         print(f"Wrote {filename} with result {res}")
         snapno +=1
