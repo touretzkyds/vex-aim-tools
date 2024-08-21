@@ -1,5 +1,7 @@
 *.py~
+*.fsm~
 *.pyc
 aim_fsm/aim.py
 aim_fsm/vex.py
 snap
+*.py.old

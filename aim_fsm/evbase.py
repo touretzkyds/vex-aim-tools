@@ -28,7 +28,8 @@ class Event:
 
 class EventRouter:
     """An event router drives the state machine."""
-    def __init__(self):
+    def __init__(self, robot):
+        self.robot = robot
         # dispatch_table: event_class -> (source,listener)...
         self.dispatch_table = dict()
         # listener_registry: listener -> (event_class, source)...
@@ -126,7 +127,7 @@ class EventRouter:
             cnt += 1
             if TRACE.trace_level >= TRACE.listener_invocation:
                 print('TRACE%d:' % TRACE.listener_invocation, listener.__self__, 'receiving', event)
-            self.robot.loop.call_soon(listener,event)
+            self.robot.loop.call_soon_threadsafe(listener,event)
     
     def add_process_node(self, node):
         self.processes[id(node)] = node
@@ -154,7 +155,6 @@ class EventRouter:
         self.robot.loop.call_later(self.POLLING_INTERVAL, self.poll_processes)
 
 #________________ Event Listener ________________
-
 
 class EventListener:
     """Parent class for both StateNode and Transition."""

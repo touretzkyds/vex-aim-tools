@@ -61,16 +61,14 @@ class Aruco(object):
         self.ids = []
         self.corners = []
 
-        if robot.camera is None: return  # robot is a SimRobot
-
         # Added for pose estimation
         self.marker_size = marker_size #these units will be pose est units!!
-        self.image_size = (320,240)
-        focal_len = robot.camera._config._focal_length
+        self.image_size = (640,480)
+        focal_len = 2.5 # *** FIX THIS ***
         self.camera_matrix = \
-            array([[focal_len.x ,  0,            self.image_size[0]/2],
-                         [0,             -focal_len.y, self.image_size[1]/2],
-                         [0,             0,            1]]).astype(float)
+            array([[focal_len,  0,            self.image_size[0]/2],
+                   [0,          -focal_len,   self.image_size[1]/2],
+                   [0,             0,            1]]).astype(float)
         self.distortion_array = array([[0,0,0,0,0]]).astype(float)
 
     def process_image(self,gray):

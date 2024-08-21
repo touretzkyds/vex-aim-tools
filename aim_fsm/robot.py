@@ -7,6 +7,7 @@ from .evbase import EventRouter
 from .events import *
 from .actuators import *
 from .aruco import *
+from .worldmap import *
 
 class Robot():
     def __init__(self, robot0=None, loop=None):
@@ -14,10 +15,11 @@ class Robot():
             robot0 = aim.Robot()
         self.robot0 = robot0
         self.loop = loop
+        self.world = WorldMap(self)
         self.status = self.robot0._ws_status_thread.current_status['robot']
         acts = [DriveActuator(self), SoundActuator(self), KickActuator(self), LEDsActuator(self)]
         self.actuators = {act.name : act for act in acts}
-        self.erouter = EventRouter()
+        self.erouter = EventRouter(self)
         self.cam_viewer = None
         self.touch = '0x00'
         robot0._ws_status_thread.callback = self.status_callback
