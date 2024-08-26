@@ -15,7 +15,7 @@ except:
 from . import opengl
 
 # For capturing images
-global snapno, path
+global snapno, path, running_fsm
 snapno = 0
 path = 'snap/'
 
@@ -34,11 +34,8 @@ class CamViewer():
 
     def process_image(self):
         raw = self.robot.camera_image
-        gray = cv2.cvtColor(raw,cv2.COLOR_BGR2GRAY)
 
         """
-        running_fsm = program.running_fsm
-
         # Aruco image processing
         if running_fsm.aruco:
             running_fsm.robot.world.aruco.process_image(gray)
@@ -48,7 +45,6 @@ class CamViewer():
 
         # Annotate and display image if requested
         if running_fsm.force_annotation or running_fsm.cam_viewer is not None:
-            scale = running_fsm.annotated_scale_factor
             # Apply Cozmo SDK annotations and rescale.
             if running_fsm.annotate_sdk:
                 coz_ann = self.robot.world.latest_image.annotate_image(scale=scale)
@@ -73,7 +69,13 @@ class CamViewer():
                 cv2.line(annotated_im, (0,int(shape[0]/2)), (shape[1],int(shape[0]/2)), (0,255,255), 1)
             image = annotated_im
         """
-        image = raw.copy()
+        scale = 1
+        if scale == 1:
+            image = raw.copy()
+        else:
+            shape = raw.shape
+            dsize = (scale*shape[1], scale*shape[0])
+            image = cv2.resize(raw, dsize)
         for obj in self.robot.robot0.status['aivision']['objects']['items']:
             name = obj['name']
             if name == 'Ball':
@@ -91,8 +93,10 @@ class CamViewer():
                           ((obj['originx'] + obj['width'])*2, (obj['originy'] + obj['height'])*2),
                           color,
                           1) 
-        #cv2.rectangle(image, (635,475), (639,479), (0,255,0), 1)
+        if self.robot.aruco and len(self.robot.aruco.seen_marker_ids) > 0:
+            self.robot.aruco.annotate(image,scale)
         self.robot.annotated_image = image
+        # Done with annotation
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, self.width, self.height, 0, GL_BGR, GL_UNSIGNED_BYTE, image)
         glutPostRedisplay()
 
@@ -178,19 +182,19 @@ class CamViewer():
     def specialKeyPressed(self, key, x, y):
         global leftorrightindicate, globthres
         if key == GLUT_KEY_LEFT:
-            self.robot.drive_wheels(-100, 100)
+            #self.robot.drive_wheels(-100, 100)
             leftorrightindicate = True
             globthres=100
         elif key == GLUT_KEY_RIGHT:
-            self.robot.drive_wheels(100, -100)
+            #self.robot.drive_wheels(100, -100)
             leftorrightindicate = True
             globthres = 100
         elif key == GLUT_KEY_UP:
-            self.robot.drive_wheels(200, 200)
+            #self.robot.drive_wheels(200, 200)
             leftorrightindicate = False
             globthres = 100
         elif key == GLUT_KEY_DOWN:
-            self.robot.drive_wheels(-200, -200)
+            #self.robot.drive_wheels(-200, -200)
             leftorrightindicate = True
             globthres = 100
         glutPostRedisplay()

@@ -6,3 +6,4 @@ from .cam_viewer import CamViewer
 from .robot import Robot
 from .program import StateMachineProgram, runfsm
 from .worldmap import *
+from .geometry import *

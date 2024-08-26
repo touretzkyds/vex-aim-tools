@@ -2,6 +2,6 @@ from aim_fsm import *
 
 class Kicker(StateMachineProgram):
   $setup{
-    Kick() =C=> Print('Kicked') =C=> Kick()
+    Kick() =C=> Print('Kicked') =T(0.5)=> Kick()
   }
 

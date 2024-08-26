@@ -3,5 +3,6 @@
 *.pyc
 aim_fsm/aim.py
 aim_fsm/vex.py
+notes.txt
 snap
 *.py.old

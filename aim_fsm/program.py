@@ -15,10 +15,10 @@ from .evbase import EventRouter
 from .base import StateNode
 from .cam_viewer import CamViewer
 from .aruco import *
+from .worldmap import WorldMap
 #from .particle import *
 #from .aim_kin import *
 #from .particle_viewer import ParticleViewer
-#from .worldmap import WorldMap
 #from .rrt import RRT
 #from .path_viewer import PathViewer
 #from .worldmap_viewer import WorldMapViewer
@@ -51,7 +51,6 @@ class StateMachineProgram(StateNode):
 
                  perched_cameras = False,
 
-                 world_map = None,
                  worldmap_viewer = False,
 
                  rrt = None,
@@ -91,20 +90,19 @@ class StateMachineProgram(StateNode):
         self.aruco = aruco
         self.aruco_marker_size = aruco_marker_size
         if self.aruco:
-            self.robot.world.aruco = \
+            self.robot.aruco = \
                 Aruco(self.robot, arucolibname, aruco_marker_size, aruco_disabled_ids)
 
         self.perched_cameras = perched_cameras
         if self.perched_cameras:
-            self.robot.world.perched = PerchedCameraThread(self.robot)
+            self.robot.perched = PerchedCameraThread(self.robot)
 
         self.robot.aruco_id = -1
         self.robot.use_shared_map = False
-        #self.robot.world.server = ServerThread(self.robot)
-        #self.robot.world.client = ClientThread(self.robot)
-        #self.robot.world.is_server = True # Writes directly into perched.camera_pool
+        #self.robot.world_map.server = ServerThread(self.robot)
+        #self.robot.world_map.client = ClientThread(self.robot)
+        #self.robot.world_map.is_server = True # Writes directly into perched.camera_pool
 
-        self.world_map = world_map
         self.worldmap_viewer = worldmap_viewer
 
         self.rrt = rrt
@@ -155,14 +153,14 @@ class StateMachineProgram(StateNode):
             if self.cam_viewer is True:
                 self.cam_viewer = CamViewer(self.robot)
             self.cam_viewer.start()
-        self.robot.world.cam_viewer = self.cam_viewer
+        self.robot.world_map.cam_viewer = self.cam_viewer
 
         if self.particle_viewer:
             if self.particle_viewer is True:
                 self.particle_viewer = \
                     ParticleViewer(self.robot, scale=self.particle_viewer_scale)
             self.particle_viewer.start()
-        self.robot.world.particle_viewer = self.particle_viewer
+        self.robot.world_map.particle_viewer = self.particle_viewer
 
         if self.path_viewer:
             if self.path_viewer is True:
@@ -170,13 +168,13 @@ class StateMachineProgram(StateNode):
             else:
                 self.path_viewer.set_rrt(self.robot.world.rrt)
             self.path_viewer.start()
-        self.robot.world.path_viewer = self.path_viewer
+        self.robot.world_map.path_viewer = self.path_viewer
 
         if self.worldmap_viewer:
             if self.worldmap_viewer is True:
                 self.worldmap_viewer = WorldMapViewer(self.robot)
             self.worldmap_viewer.start()
-        self.robot.world.worldmap_viewer = self.worldmap_viewer
+        self.robot.world_map.worldmap_viewer = self.worldmap_viewer
 
         # Start speech recognition if requested
         if self.speech:
@@ -221,24 +219,19 @@ class StateMachineProgram(StateNode):
     def user_annotate(self,image):
         return image
 
-    def process_image(self,event,**kwargs):
-        if self.cam_viewer:
-            # if show cam_viewer, run the process_image under cam_viewer
-            pass
-        else:
-            curim = numpy.array(event.image.raw_image) #cozmo-raw image
-            gray = cv2.cvtColor(curim,cv2.COLOR_BGR2GRAY)
+    def process_image(self,image):
+        # Aruco image processing
+        if self.aruco:
+            gray = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+            self.robot.aruco.process_image(gray)
+        # Other image processors can run here if the user supplies them.
+        self.user_image(image,gray)
+        # Done with image processing
 
-            # Aruco image processing
-            if self.aruco:
-                self.robot.world.aruco.process_image(gray)
-            # Other image processors can run here if the user supplies them.
-            self.user_image(curim,gray)
-            # Done with image processing
-
-            # Annotate and display image if requested
-            if self.force_annotation or self.viewer is not None:
-                scale = self.annotated_scale_factor
+        """
+        # Annotate and display image if requested
+        if self.force_annotation or self.viewer is not None:
+            scale = self.annotated_scale_factor
                 # Apply Cozmo SDK annotations and rescale.
                 if self.annotate_sdk:
                     coz_ann = event.image.annotate_image(scale=scale)
@@ -251,7 +244,7 @@ class StateMachineProgram(StateNode):
                     annotated_im = curim
                 # Aruco annotation
                 if self.aruco and \
-                       len(self.robot.world.aruco.seen_marker_ids) > 0:
+                       len(self.robot.aruco.seen_marker_ids) > 0:
                     annotated_im = self.robot.world.aruco.annotate(annotated_im,scale)
                 # Other annotators can run here if the user supplies them.
                 annotated_im = self.user_annotate(annotated_im)
@@ -264,7 +257,8 @@ class StateMachineProgram(StateNode):
             pf.look_for_new_landmarks()
 
         # Finally update the world map
-        self.robot.world.world_map.update_map()
+        self.robot.world_map.update_map()
+        """
 
 ################
 

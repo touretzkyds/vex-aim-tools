@@ -3,11 +3,14 @@ import numpy as np
 import cv2
 
 from . import aim
+from .camera import *
+from .aim_kin import *
 from .evbase import EventRouter
 from .events import *
 from .actuators import *
 from .aruco import *
 from .worldmap import *
+from . import program
 
 class Robot():
     def __init__(self, robot0=None, loop=None):
@@ -15,7 +18,10 @@ class Robot():
             robot0 = aim.Robot()
         self.robot0 = robot0
         self.loop = loop
-        self.world = WorldMap(self)
+        self.camera = Camera()
+        self.kine = AIMKinematics(self)
+        self.world_map = WorldMap(self)
+        self.aruco = None
         self.status = self.robot0._ws_status_thread.current_status['robot']
         acts = [DriveActuator(self), SoundActuator(self), KickActuator(self), LEDsActuator(self)]
         self.actuators = {act.name : act for act in acts}
@@ -35,6 +41,7 @@ class Robot():
         self.old_status = self.status
         self.status = self.robot0._ws_status_thread.current_status['robot']
         self.update_actuators()
+        self.world_map.update()
         t = self.status['touch_flags']
         if self.touch != t:
             print(f"status_update in {threading.current_thread().native_id}")
@@ -54,4 +61,5 @@ class Robot():
         image_bytes = ws.image_list[ws._next_image_index]
         image_array = np.frombuffer(image_bytes, dtype='uint8')
         self.camera_image = cv2.imdecode(image_array, cv2.IMREAD_UNCHANGED)
-        # aruco detection goes here
+        if program.running_fsm:
+            program.running_fsm.process_image(self.camera_image)

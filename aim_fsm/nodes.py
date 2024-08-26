@@ -94,10 +94,14 @@ class Print(StateNode):
 class Kick(StateNode):
     KICK_DURATION = 0.5 # seconds
 
+    def __init__(self, kicktype=vex.KickType.SOFT):
+        super().__init__()
+        self.kicktype = kicktype
+
     def start(self,event=None):
         super().start(event)
         self.robot.actuators['kick'].lock(self)
-        self.robot.robot0.kick(vex.KickType.SOFT)
+        self.robot.robot0.kick(self.kicktype)
         self.robot.loop.call_soon_threadsafe(self.delayed_completion)
 
     def delayed_completion(self):

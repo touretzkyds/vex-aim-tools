@@ -4,7 +4,7 @@ except: pass
 import math
 from numpy import sqrt, arctan2, array, multiply
 
-ARUCO_MARKER_SIZE = 44
+ARUCO_MARKER_SIZE = 40
 
 class ArucoMarker(object):
     def __init__(self, aruco_parent, marker_id, bbox, translation, rotation):
@@ -52,6 +52,7 @@ class ArucoMarker(object):
 
 class Aruco(object):
     def __init__(self, robot, arucolibname, marker_size=ARUCO_MARKER_SIZE, disabled_ids=[]):
+        self.robot = robot
         self.arucolibname = arucolibname
         if arucolibname is not None:
             self.aruco_lib = cv2.aruco.getPredefinedDictionary(arucolibname)
@@ -63,11 +64,11 @@ class Aruco(object):
 
         # Added for pose estimation
         self.marker_size = marker_size #these units will be pose est units!!
-        self.image_size = (640,480)
-        focal_len = 2.5 # *** FIX THIS ***
+        self.image_size = self.robot.camera.resolution
+        focal_len = self.robot.camera.focal_length
         self.camera_matrix = \
-            array([[focal_len,  0,            self.image_size[0]/2],
-                   [0,          -focal_len,   self.image_size[1]/2],
+            array([[focal_len[0],  0,            self.image_size[0]/2],
+                   [0,          -focal_len[1],   self.image_size[1]/2],
                    [0,             0,            1]]).astype(float)
         self.distortion_array = array([[0,0,0,0,0]]).astype(float)
 
