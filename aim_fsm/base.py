@@ -71,6 +71,9 @@ class StateNode(EventListener):
             if child.running:
                 child.stop()
 
+    def complete(self, actuator=None):
+        pass
+
     def add_transition(self, trans):
         if not isinstance(trans, Transition):
             raise TypeError('%s is not a Transition' % trans)

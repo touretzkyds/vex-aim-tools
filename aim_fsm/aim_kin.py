@@ -9,8 +9,9 @@ from .geometry import tprint, point, translation_part, rotation_part
 
 body_diameter = 57 # mm
 kicker_extension = 15 # mm
-camera_tilt = 18 # degrees
+camera_angle = 18 # degrees
 camera_height = 43.47 # mm
+camera_from_origin = 27 # mm (approx)
 
 # ================================================================
 
@@ -33,14 +34,26 @@ class AIMKinematics(Kinematics):
                   #collision_model=Circle(geometry.point(), radius=10))
             )
 
-        # x axis points right, y points down, z points forward
+        # camera dummy: located above base frame but oriented correctly.
+        #
+        # Two similar triangles: the smaller one is determined by
+        # camera_height and camera_angle; its apex is located at the
+        # camera.  The larger triangle's apex is directly above the
+        # base frame origin.
+        y1 = camera_height
+        x1 =  y1 / tan(camera_angle*pi/180)
+        x2 = x1 + camera_from_origin
+        y2 = x2 * tan(camera_angle*pi/180)
         camera_dummy = Joint('camera_dummy', parent=base_frame,
                              description='Camera dummy joint located above base frame',
-                             d=45., theta=-pi/2, alpha=-(90+camera_tilt)/180*pi)
+                             d=y2, theta=-pi/2, alpha=-(90+camera_angle)*pi/180)
 
+        # camera frame: x axis points right, y points down, z points forward
+        r1 = (x1**2 + y1**2) ** 0.5
+        r2 = (x2**2 + y2**2) ** 0.5
         camera_frame = Joint('camera', parent=camera_dummy,
                              description = 'Camera frame: x right, y down, z depth',
-                             d = 30)
+                             d = r2-r1)
 
         joints = [base_frame, world_frame, kicker_frame, camera_dummy, camera_frame]
 

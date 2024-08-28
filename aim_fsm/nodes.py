@@ -91,26 +91,47 @@ class Print(StateNode):
 
 # Actions
 
-class Kick(StateNode):
-    KICK_DURATION = 0.5 # seconds
+class ActionNode(StateNode):
+    def complete(self,actuator):
+        actuator.unlock(self)
+        self.post_completion()
 
+class Kick(ActionNode):
     def __init__(self, kicktype=vex.KickType.SOFT):
         super().__init__()
         self.kicktype = kicktype
 
     def start(self,event=None):
         super().start(event)
-        self.robot.actuators['kick'].lock(self)
-        self.robot.robot0.kick(self.kicktype)
-        self.robot.loop.call_soon_threadsafe(self.delayed_completion)
+        self.robot.actuators['kick'].kick(self, self.kicktype)
 
-    def delayed_completion(self):
-        self.robot.loop.create_task(self.delayed_completion2())
+class Say(ActionNode):
+    """Speaks some text, then posts a completion event."""
 
-    async def delayed_completion2(self):
-        await asyncio.sleep(self.KICK_DURATION)
-        self.robot.actuators['kick'].unlock()
-        self.post_completion()
+    class SayDataEvent(Event):
+        def __init__(self,text=None):
+            self.text = text
+
+    def __init__(self, text="I'm speechless", abort_on_stop=False):
+        self.text = text
+        super().__init__()
+
+    def start(self,event=None):
+        if self.running: return
+        if isinstance(event, self.SayDataEvent):
+            utterance = event.text
+        else:
+            utterance = self.text
+        if isinstance(utterance, (list,tuple)):
+            utterance = random.choice(utterance)
+        if not isinstance(utterance, str):
+            utterance = repr(utterance)
+        self.utterance = utterance
+        super().start(event)
+        print("Speaking: '",utterance,"'",sep='')
+
+        self.robot.actuators['sound'].say_text(self, self.utterance)
+
 
 class AbortAllActions(StateNode):
     def start(self,event=None):
@@ -142,41 +163,6 @@ class SaveImage(StateNode):
             print('Wrote',fname)
 
 
-
-class Say(StateNode):
-    """Speaks some text, then posts a completion event."""
-
-    class SayDataEvent(Event):
-        def __init__(self,text=None):
-            self.text = text
-
-    def __init__(self, text="I'm speechless",
-                 abort_on_stop=False, **action_kwargs):
-        self.text = text
-        self.action_kwargs = action_kwargs
-        super().__init__(abort_on_stop)
-
-    def start(self,event=None):
-        if self.running: return
-        if isinstance(event, self.SayDataEvent):
-            utterance = event.text
-        else:
-            utterance = self.text
-        if isinstance(utterance, (list,tuple)):
-            utterance = random.choice(utterance)
-        if not isinstance(utterance, str):
-            utterance = repr(utterance)
-        self.utterance = utterance
-        print("Speaking: '",utterance,"'",sep='')
-        super().start(event)
-
-    def action_launcher(self):
-        if self.utterance.rstrip() == '':
-            # robot.say_text() action would fail on empty string
-            self.post_completion()
-            return None
-        else:
-            return self.robot.say_text(self.utterance, **self.action_kwargs)
 
 
 #________________ Multiprocessing ________________

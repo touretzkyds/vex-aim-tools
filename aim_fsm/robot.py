@@ -40,6 +40,9 @@ class Robot():
     def status_update(self):
         self.old_status = self.status
         self.status = self.robot0._ws_status_thread.current_status['robot']
+        self.x = self.status['robot_x']
+        self.y = self.status['robot_y']
+        self.theta = self.status['heading']
         self.update_actuators()
         self.world_map.update()
         t = self.status['touch_flags']

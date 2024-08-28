@@ -14,6 +14,37 @@ class WorldObject():
         else:
             self.pose_confidence = -1
 
+    def __repr__(self):
+        return f'<{self.__class__.__name__} at ({self.x:.1f}, {self.y:.1f})>'
+
+
+class OrangeBarrelObj(WorldObject):
+    def __init__(self, spec):
+        super().__init__()
+        self.spec = spec
+        self.name = spec['name']
+        self.diameter = 22 # mm
+
+class BlueBarrelObj(WorldObject):
+    def __init__(self, spec):
+        super().__init__()
+        self.spec = spec
+        self.name = spec['name']
+        self.diameter = 22 # mm
+
+class BallObj(WorldObject):
+    def __init__(self, spec):
+        super().__init__()
+        self.spec = spec
+        self.name = spec['name']
+
+class RobotObj(WorldObject):
+    def __init__(self, spec):
+        super().__init__()
+        self.spec = spec
+        self.name = spec['name']
+
+
 class ArucoMarkerObj(WorldObject):
     def __init__(self, aruco_parent, marker_number, id=None, x=0, y=0, z=0, theta=0):
         if id is None:
@@ -37,36 +68,7 @@ class ArucoMarkerObj(WorldObject):
         else:
             return '<ArucoMarkerObj %d: position unknown>' % self.marker_number
 
-class OrangeBarrelObj(WorldObject):
-    def __init__(self, spec):
-        self.spec = spec
-        self.name = spec['name']
-
-    def __repr__(self):
-        return '<OrangeBarrelObj >'
-
-class BlueBarrelObj(WorldObject):
-    def __init__(self, spec):
-        self.spec = spec
-        self.name = spec['name']
-
-class BlueBarrelObj(WorldObject):
-    def __init__(self, spec):
-        self.spec = spec
-        self.name = spec['name']
-
-    def __repr__(self):
-        return '<BlueBarrelObj >'
-
-
-class BallObj(WorldObject):
-    def __init__(self, spec):
-        self.spec = spec
-        self.name = spec['name']
-
-    def __repr__(self):
-        return '<BallObj >'
-
+################################################################
 
 class WorldMap():
 
@@ -83,12 +85,11 @@ class WorldMap():
     def update(self):
         objspecs = self.robot.robot0._ws_status_thread.current_status['aivision']['objects']['items']
         for spec in objspecs:
-            if spec['name'] in self.objects:
-                pass
-            else:
+            if spec['name'] not in self.objects:
                 obj = self.make_object(spec)
                 self.objects[obj.name] = obj
                 print(f"Created {obj}")
+            self.update_object(spec)
 
     def make_object(self, spec):
         if spec['name'] == 'OrangeBarrel':
@@ -97,7 +98,18 @@ class WorldMap():
             obj = BlueBarrelObj(spec)
         elif spec['name'] == 'Ball':
             obj = BallObj(spec)
+        elif spec['name'] == 'Robot':
+            obj = RobotObj(spec)
         else:
-            print(f"spec = {spec}")
+            print(f"ERROR **** spec = {spec}")
             obj = None
         return obj
+
+    def update_object(self, spec):
+        cx = (spec['originx'] + spec['width']/2) * 2
+        cy = (spec['originy'] + spec['height']) * 2
+        hit = self.robot.kine.project_to_ground(cx, cy)
+        obj = self.objects[spec['name']]
+        obj.x = hit[0,0]
+        obj.y = hit[1,0]
+
