@@ -42,6 +42,7 @@ class Robot():
         self.status = self.robot0._ws_status_thread.current_status['robot']
         self.x = float(self.status['robot_y'])
         self.y = -float(self.status['robot_x'])
+        self.z = 0
         self.theta = 360-float(self.status['heading'])
         self.update_actuators()
         self.world_map.update()

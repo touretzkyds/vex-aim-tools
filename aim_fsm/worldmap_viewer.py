@@ -773,7 +773,19 @@ class WorldMapViewer():
             color = color_orange
         else:
             color = color_blue
-        self.make_cylinder(radius=12, height=20, color=color)
+        self.make_cylinder(radius=10, height=25, color=color)
+        glPopMatrix()
+        glEndList()
+        gl_lists.append(c)
+
+    def make_vex_robot(self):
+        global gl_lists
+        c = glGenLists(1)
+        glNewList(c, GL_COMPILE)
+        glPushMatrix()
+        glTranslatef(self.robot.x, self.robot.y, self.robot.z)
+        color = color_light_gray
+        self.make_cylinder(radius=32, height=72, color=color)
         glPopMatrix()
         glEndList()
         gl_lists.append(c)
@@ -822,7 +834,7 @@ class WorldMapViewer():
         self.make_axes()
         self.make_gazepoint()
         #self.make_cozmo_robot()
-        #self.make_vex_robot()
+        self.make_vex_robot()
         self.make_floor()
         self.make_objects()  # walls, light cubes, custom cubes, and chips
 
