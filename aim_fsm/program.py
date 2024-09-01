@@ -14,6 +14,7 @@ global robot_for_loading
 from .evbase import EventRouter
 from .base import StateNode
 from .cam_viewer import CamViewer
+from .worldmap_viewer import WorldMapViewer
 from .aruco import *
 from .worldmap import WorldMap
 #from .particle import *
@@ -21,7 +22,6 @@ from .worldmap import WorldMap
 #from .particle_viewer import ParticleViewer
 #from .rrt import RRT
 #from .path_viewer import PathViewer
-#from .worldmap_viewer import WorldMapViewer
 #from .speech import SpeechListener, Thesaurus
 from . import opengl
 #from . import custom_objs
@@ -34,6 +34,7 @@ class StateMachineProgram(StateNode):
     def __init__(self,
                  #kine_class = CozmoKinematics,
                  cam_viewer = True,
+                 worldmap_viewer = True,
                  force_annotation = False,   # set to True for annotation even without cam_viewer
                  annotate_sdk = True,        # include annotations for SDK's object detections
                  annotated_scale_factor = 1, # set to 1 to avoid cost of resizing images
@@ -51,8 +52,6 @@ class StateMachineProgram(StateNode):
 
                  perched_cameras = False,
 
-                 worldmap_viewer = False,
-
                  rrt = None,
                  path_viewer = False,
 
@@ -63,6 +62,8 @@ class StateMachineProgram(StateNode):
         super().__init__()
         self.name = self.__class__.__name__.lower()
         self.parent = None
+        self.robot.robot0.inertial.calibrate()
+        self.robot.robot0.set_pose(0,0,0)
 
         if not hasattr(self.robot, 'erouter'):
             self.robot.erouter = EventRouter()
@@ -153,7 +154,13 @@ class StateMachineProgram(StateNode):
             if self.cam_viewer is True:
                 self.cam_viewer = CamViewer(self.robot)
             self.cam_viewer.start()
-        self.robot.world_map.cam_viewer = self.cam_viewer
+        self.robot.cam_viewer = self.cam_viewer
+
+        if self.worldmap_viewer:
+            if self.worldmap_viewer is True:
+                self.worldmap_viewer = WorldMapViewer(self.robot)
+            self.worldmap_viewer.start()
+        self.robot.worldmap_viewer = self.worldmap_viewer
 
         if self.particle_viewer:
             if self.particle_viewer is True:
@@ -169,12 +176,6 @@ class StateMachineProgram(StateNode):
                 self.path_viewer.set_rrt(self.robot.world.rrt)
             self.path_viewer.start()
         self.robot.world_map.path_viewer = self.path_viewer
-
-        if self.worldmap_viewer:
-            if self.worldmap_viewer is True:
-                self.worldmap_viewer = WorldMapViewer(self.robot)
-            self.worldmap_viewer.start()
-        self.robot.world_map.worldmap_viewer = self.worldmap_viewer
 
         # Start speech recognition if requested
         if self.speech:

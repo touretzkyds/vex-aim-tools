@@ -10,6 +10,7 @@ from .geometry import tprint, point, translation_part, rotation_part
 body_diameter = 57 # mm
 kicker_extension = 15 # mm
 camera_angle = 18 # degrees
+camera_angle = 25 # degrees
 camera_height = 43.47 # mm
 camera_from_origin = 27 # mm (approx)
 

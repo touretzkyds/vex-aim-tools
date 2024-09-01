@@ -31,6 +31,7 @@ class CamViewer():
         self.windowName = windowName
         self.scale = 1
         self.show_axes = True
+        self.crosshairs = False
 
     def process_image(self):
         raw = self.robot.camera_image
@@ -76,6 +77,11 @@ class CamViewer():
             shape = raw.shape
             dsize = (scale*shape[1], scale*shape[0])
             image = cv2.resize(raw, dsize)
+
+        if self.crosshairs:
+            cv2.line(image, (int(self.width/2), 0), (int(self.width/2), self.height), (0,255,255), 1)
+            cv2.line(image, (0, int(self.height/2)), (self.width, int(self.height/2)), (0,255,255), 1)
+
         for obj in self.robot.robot0.status['aivision']['objects']['items']:
             name = obj['name']
             if name == 'Ball':
@@ -95,7 +101,7 @@ class CamViewer():
                           1) 
         if self.robot.aruco and len(self.robot.aruco.seen_marker_ids) > 0:
             self.robot.aruco.annotate(image,scale)
-        self.robot.annotated_image = image
+        self.robot.annotated_image = image.copy()
         # Done with annotation
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, self.width, self.height, 0, GL_BGR, GL_UNSIGNED_BYTE, image)
         glutPostRedisplay()
@@ -209,7 +215,7 @@ class CamViewer():
     def capture_raw(self, name='robot_snap'):
         self.capture_image(self.robot.camera_image, name)
 
-    def capture_annotated(self, name='robot_snap'):
+    def capture_annotated(self, name='robot_asnap'):
         self.capture_image(self.robot.annotated_image, name)
 
     def capture_image(self, image, name):

@@ -1,3 +1,5 @@
+from .geometry import *
+
 class WorldObject():
     def __init__(self, id=None, x=0, y=0, z=0, is_visible=None):
         self.id = id
@@ -110,6 +112,8 @@ class WorldMap():
         cy = (spec['originy'] + spec['height']) * 2
         hit = self.robot.kine.project_to_ground(cx, cy)
         obj = self.objects[spec['name']]
-        obj.x = hit[0,0]
-        obj.y = hit[1,0]
+        robotpos = point(self.robot.x, self.robot.y)
+        objpos = aboutZ(self.robot.theta*pi/180).dot(hit) + robotpos
+        obj.x = objpos[0][0]
+        obj.y = objpos[1][0]
 

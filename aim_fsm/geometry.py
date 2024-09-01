@@ -9,8 +9,8 @@ from math import sin, cos, tan, pi, atan2, asin, sqrt, floor, ceil
 from fractions import Fraction
 import copy
 
-def point(x=0,y=0,z=0):
-    return np.array([ [x], [y], [z], [1.] ])
+def point(x=0, y=0, z=0, s=1):
+    return np.array([ [x], [y], [z], [s] ])
 
 def norm(pt):
     return pt[0][0:3].norm()
