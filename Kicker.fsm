@@ -1,11 +1,21 @@
 from aim_fsm import *
 
 class Kicker(StateMachineProgram):
-  $setup{
-    Say('Kicking') =C=> Kick() =C=> Say('Kicked') =C=> {turner, talker} =C=> Say('Done')
+    class Turn25(Turn):
+        def __init__(self):
+            super().__init__(0)
+            
+        def start(self, event):
+            self.angle_deg = 250
+            print(f"TurnToBarrel angle_deg = {self.angle_deg} deg")
+            super().start(event)
 
-    turner: Turn(200)
 
-    talker: Say('I am turning')
-  }
+    $setup{
+        Say('Kicking') =C=> Kick() =C=> Say('Kicked') =C=> {turner, talker} =C=> Say('Done')
+
+        turner: self.Turn25()
+
+        talker: Say('I am turning')
+    }
 

@@ -1,0 +1,41 @@
+from aim_fsm import *
+
+class FetchOrange(StateMachineProgram):
+
+    class CheckForBarrel(StateNode):
+        def start(self, event=None):
+            super().start(event)
+            if 'OrangeBarrel' in self.robot.world_map.objects:
+                barrel = self.robot.world_map.objects['OrangeBarrel']
+                self.parent.barrel_coords = (barrel.x, barrel.y)
+                self.post_success()
+            else:
+                self.post_failure()
+
+    class TurnToBarrel(Turn):
+        def __init__(self):
+            super().__init__(0)
+            
+        def start(self, event):
+            (x,y) = self.parent.barrel_coords
+            self.angle_deg = atan2(y - self.robot.y, x - self.robot.x) * 180/pi
+            print(f"TurnToBarrel angle_deg = {self.angle_deg} deg")
+            super().start(event)
+
+    class DriveToBarrel(Forward):
+        def __init__(self):
+            super().__init__(0)
+            
+        def start(self, event):
+            robot_radius = 15
+            (x,y) = self.parent.barrel_coords
+            xd = x - self.robot.x
+            yd = y - self.robot.y
+            self.distance_mm = sqrt(xd*xd + yd*yd) - robot_radius
+            super().start(event)
+
+    $setup{
+        look: self.CheckForBarrel()
+        look =F=> look
+        look =S=> self.TurnToBarrel() =C=> self.DriveToBarrel()
+    }

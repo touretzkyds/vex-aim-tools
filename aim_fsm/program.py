@@ -62,7 +62,6 @@ class StateMachineProgram(StateNode):
         super().__init__()
         self.name = self.__class__.__name__.lower()
         self.parent = None
-        self.robot.robot0.inertial.calibrate()
         self.robot.robot0.set_pose(0,0,0)
 
         if not hasattr(self.robot, 'erouter'):

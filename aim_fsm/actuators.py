@@ -55,7 +55,7 @@ class DriveActuator(Actuator):
 
     def forward(self, node, distance_mm, drive_speed=None):
         self.lock(node)
-        self.robot.forward(self.distance_mm, self.drive_speed)
+        self.robot.forward(distance_mm, drive_speed=drive_speed)
 
 
 class SoundActuator(Actuator):
