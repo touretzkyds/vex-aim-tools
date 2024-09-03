@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 
 from . import aim
+from . import vex
 from .camera import *
 from .aim_kin import *
 from .evbase import EventRouter
@@ -40,10 +41,18 @@ class Robot():
     def status_update(self):
         self.old_status = self.status
         self.status = self.robot0._ws_status_thread.current_status['robot']
+        gyro = sum([abs(float(self.status['gyro_rate'][axis])) for axis in 'xyz'])
+        accel = abs(float(self.status['pitch'])) + abs(float(self.status['roll']))
+        if accel > 10:
+            self.robot0.stop_drive()
+            self.robot0.play_sound(vex.SoundType.ALARM, 100)
         self.x = float(self.status['robot_y'])
         self.y = -float(self.status['robot_x'])
         self.z = 0
-        self.theta = 360-float(self.status['heading'])
+        heading = 360 - float(self.status['heading'])
+        if heading > 180:
+            heading = heading - 360
+        self.theta = heading / 180 * pi
         self.update_actuators()
         self.world_map.update()
         t = self.status['touch_flags']
@@ -67,3 +76,13 @@ class Robot():
         self.camera_image = cv2.imdecode(image_array, cv2.IMREAD_UNCHANGED)
         if program.running_fsm:
             program.running_fsm.process_image(self.camera_image)
+
+    def turn(self, angle_rads, turn_speed=None):
+        if angle_rads > 0:
+            turntype = vex.TurnType.LEFT
+        else:
+            turntype = vex.TurnType.RIGHT
+        self.robot0.turn_for(turntype, angle_rads*180/pi, turn_speed=turn_speed, wait=False)
+
+    def forward(self, distance_mm, drive_speed=None):
+        self.robot0.drive_for(distance_mm, 0, drive_speed=drive_speed, wait=False)

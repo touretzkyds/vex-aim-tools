@@ -89,7 +89,30 @@ class Print(StateNode):
         print(text)
         self.post_completion()
 
-# Actions
+class SaveImage(StateNode):
+    "Save an image to a file."
+
+    def __init__(self, filename="image", filetype="jpg", counter=0, verbose=True):
+        super().__init__()
+        self.filename = filename
+        self.filetype = filetype
+        self.counter = counter
+        self.verbose = verbose
+
+    def start(self,event=None):
+        super().start(event)
+        fname = self.filename
+        if isinstance(self.counter, int):
+            fname = fname + str(self.counter)
+            self.counter = self.counter + 1
+        fname = fname + "." + self.filetype
+        image = np.array(self.robot.world.latest_image.raw_image)
+        cv2.imwrite(fname, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        if self.verbose:
+            print('Wrote',fname)
+
+
+#________________ Actions ________________
 
 class ActionNode(StateNode):
     def complete(self,actuator):
@@ -101,9 +124,31 @@ class Kick(ActionNode):
         super().__init__()
         self.kicktype = kicktype
 
-    def start(self,event=None):
+    def start(self, event=None):
         super().start(event)
         self.robot.actuators['kick'].kick(self, self.kicktype)
+
+class Turn(ActionNode):
+    def __init__(self, angle_deg, turn_speed=None):
+        super().__init__()
+        self.angle_deg = angle_deg
+        self.turn_speed = turn_speed
+
+    def start(self, event=None):
+        super().start(event)
+        self.robot.actuators['drive'].turn(self, self.angle_deg*pi/180, self.turn_speed)
+
+
+class Forward(ActionNode):
+    def __init__(self, distance_mm, drive_speed=None):
+        super().__init__()
+        self.distance_mm = distance_mm
+        self.drive_speed = drive_speed
+    
+    def start(self, event=None):
+        super().start(event)
+        self.robot.actuators['drive'].forward(self, self.distance_mm, self.drive_speed)
+
 
 class Say(ActionNode):
     """Speaks some text, then posts a completion event."""
@@ -138,30 +183,6 @@ class AbortAllActions(StateNode):
         super().start(event)
         self.robot.abort_all_actions()
         self.post_completion()
-
-
-class SaveImage(StateNode):
-    "Save an image to a file."
-
-    def __init__(self, filename="image", filetype="jpg", counter=0, verbose=True):
-        super().__init__()
-        self.filename = filename
-        self.filetype = filetype
-        self.counter = counter
-        self.verbose = verbose
-
-    def start(self,event=None):
-        super().start(event)
-        fname = self.filename
-        if isinstance(self.counter, int):
-            fname = fname + str(self.counter)
-            self.counter = self.counter + 1
-        fname = fname + "." + self.filetype
-        image = np.array(self.robot.world.latest_image.raw_image)
-        cv2.imwrite(fname, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-        if self.verbose:
-            print('Wrote',fname)
-
 
 
 

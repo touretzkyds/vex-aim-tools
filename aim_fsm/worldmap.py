@@ -113,7 +113,7 @@ class WorldMap():
         hit = self.robot.kine.project_to_ground(cx, cy)
         obj = self.objects[spec['name']]
         robotpos = point(self.robot.x, self.robot.y)
-        objpos = aboutZ(self.robot.theta*pi/180).dot(hit) + robotpos
+        objpos = aboutZ(self.robot.theta).dot(hit) + robotpos
         obj.x = objpos[0][0]
         obj.y = objpos[1][0]
 

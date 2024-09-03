@@ -2,6 +2,10 @@ from aim_fsm import *
 
 class Kicker(StateMachineProgram):
   $setup{
-    Say('Kicking') =C=> Kick() =C=> Say('Kicked')
+    Say('Kicking') =C=> Kick() =C=> Say('Kicked') =C=> {turner, talker} =C=> Say('Done')
+
+    turner: Turn(200)
+
+    talker: Say('I am turning')
   }
 

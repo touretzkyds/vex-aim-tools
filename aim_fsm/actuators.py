@@ -49,6 +49,15 @@ class DriveActuator(Actuator):
             self.holder.complete(self)
             self.holder = None
 
+    def turn(self, node, angle_rads, turn_speed=None):
+        self.lock(node)
+        self.robot.turn(angle_rads, turn_speed=turn_speed)
+
+    def forward(self, node, distance_mm, drive_speed=None):
+        self.lock(node)
+        self.robot.forward(self.distance_mm, self.drive_speed)
+
+
 class SoundActuator(Actuator):
     def __init__(self, robot):
         super().__init__(robot, 'sound')
