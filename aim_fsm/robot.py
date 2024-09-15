@@ -14,9 +14,9 @@ from .worldmap import *
 from . import program
 
 class Robot():
-    def __init__(self, robot0=None, loop=None):
+    def __init__(self, robot0=None, loop=None, ip="192.168.4.1"):
         if robot0 is None:
-            robot0 = aim.Robot()
+            robot0 = aim.Robot(ip=ip)
         robot0.inertial.calibrate()
         robot0.set_pose(0,0,0)
         self.robot0 = robot0
