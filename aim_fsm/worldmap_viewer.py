@@ -803,6 +803,14 @@ class WorldMapViewer():
         glTranslatef(self.robot.x, self.robot.y, self.robot.z)
         color = color_light_gray
         self.make_cylinder(radius=32, height=72, color=color)
+        glRotatef(self.robot.theta*180/pi, 0, 0, 1)
+        glTranslatef(30.0, 0.0, 42.0)
+        glColor4f(*color_black, 1)
+        quadric = gluNewQuadric()
+        gluQuadricOrientation(quadric, GLU_OUTSIDE)
+        glScalef(1.0, 1.0, 1.0)
+        radius = 12.0
+        gluSphere(quadric, radius, 60, 60)
         glPopMatrix()
         glEndList()
         gl_lists.append(c)
