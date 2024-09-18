@@ -8,43 +8,67 @@ class FetchBlue(StateMachineProgram):
             if 'BlueBarrel' in self.robot.world_map.objects:
                 barrel = self.robot.world_map.objects['BlueBarrel']
                 if barrel.is_visible:
-                    self.parent.barrel_coords = (barrel.x, barrel.y)
+                    self.parent.obj_coords = (barrel.x, barrel.y)
                     self.post_success()
                     return
             self.post_failure()
 
-    class TurnToBarrel(Turn):
+    class CheckForBall(StateNode):
+        def start(self, event=None):
+            super().start(event)
+            if 'Ball' in self.robot.world_map.objects:
+                ball = self.robot.world_map.objects['Ball']
+                if ball.is_visible:
+                    self.parent.obj_coords = (ball.x, ball.y)
+                    self.post_success()
+                    return
+            self.post_failure()
+
+    class TurnToObject(Turn):
         def __init__(self):
             super().__init__(0)
             
         def start(self, event):
-            (x,y) = self.parent.barrel_coords
-            self.angle_deg = atan2(y - self.robot.y, x - self.robot.x) * 180/pi
-            print(f"TurnToBarrel angle_deg = {self.angle_deg} deg")
+            (x,y) = self.parent.obj_coords
+            print(f"TurnToObject: obj at ({x},{y})  robot at ({robot.x},{robot.y}) @ {robot.theta*180/pi} deg.")
+            angle = wrap_angle(atan2(y - self.robot.y, x - self.robot.x) - robot.theta)
+            self.angle_deg = angle * 180/pi
+            print(f"TurnToObject angle_deg = {self.angle_deg} deg")
             super().start(event)
 
-    class DriveToBarrel(Forward):
+    class DriveToObject(Forward):
         def __init__(self):
             super().__init__(0)
             
         def start(self, event):
             robot_radius = 15
-            (x,y) = self.parent.barrel_coords
+            (x,y) = self.parent.obj_coords
             xd = x - self.robot.x
             yd = y - self.robot.y
             self.distance_mm = sqrt(xd*xd + yd*yd) - robot_radius
             super().start(event)
 
     $setup{
-        look: self.CheckForBarrel()
-        look =F=> StateNode() =T(1)=> look
-        look =S=> {say_see, turn}
+        look_barrel: self.CheckForBarrel()
+        look_barrel =S=> {say_barrel, turn_barrel}
+        look_barrel =F=> look_ball
 
-        say_see: PlaySoundFile("demo/see-barrel.mp3")
-        turn: self.TurnToBarrel() =C=> drive: self.DriveToBarrel()
-        {say_see, drive} =C=> gotit
+        say_barrel: PlaySoundFile("demo/see-barrel.mp3")
+        turn_barrel: self.TurnToObject() =C=> drive_barrel: self.DriveToObject()
+        {say_barrel, drive_barrel} =C=> got_barrel
 
-	gotit: PlaySoundFile("demo/have-barrel.mp3") =C=> Turn(180) =C=> Forward(50) =C=> Kick() =C=> away
+	got_barrel: PlaySoundFile("demo/have-barrel.mp3") =C=> Turn(180) =C=> Forward(50) =C=> Kick() =C=> away
 
-	away: Turn(-180) =C=> look
+        look_ball: self.CheckForBall()
+        look_ball =S=> {say_ball, turn_ball}
+        look_ball =F=> StateNode() =T(1)=> look_barrel
+
+        say_ball: PlaySoundFile("demo/get-ball.mp3")
+        turn_ball: self.TurnToObject() =C=> drive_ball: self.DriveToObject()
+        {say_ball, drive_ball} =C=> got_ball
+
+	got_ball: PlaySoundFile("demo/kicking-ball.mp3") =C=> Turn(180) =C=>
+          Kick(vex.KickType.MEDIUM) =C=> away
+
+	away: Turn(-180) =C=> look_barrel
     }

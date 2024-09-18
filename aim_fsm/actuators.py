@@ -45,6 +45,9 @@ class DriveActuator(Actuator):
         self.robot.robot0.stop_drive()
 
     def status_update(self):
+        # Bad timing can cause a just-started node to complete prematurely;
+        # must wait until robot is seen to be moving before considering
+        # looking for a stopped-moving status.
         if self.holder and not self.robot.robot0.is_moving():
             self.holder.complete(self)
             self.holder = None

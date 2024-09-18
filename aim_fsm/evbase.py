@@ -118,7 +118,6 @@ class EventRouter:
         return match_handlers + wildcard_handlers
 
     def post(self,event):
-        print(f"erouter.post: {event}")
         if not isinstance(event,Event):
             raise TypeError('%s is not an Event' % event)
         listeners = self._get_listeners(event)

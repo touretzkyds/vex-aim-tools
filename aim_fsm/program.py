@@ -195,10 +195,8 @@ class StateMachineProgram(StateNode):
                 self.stop_children()
         elif self.robot.was_picked_up:
             self.robot.was_picked_up = False
-            self.robot.robot0.set_pose(0,0,0)
-            self.robot.x = 0
-            self.robot.y = 0
-            self.robot.theta = 0
+            self.robot.set_pose(0,0,0)
+            self.robot.world_map.update()
             self.robot.robot0.play_sound(vex.SoundType.TOLLBOOTH, 1)
             if self.start_node:
                 self.start_node.start()

@@ -69,6 +69,14 @@ class Robot():
                                      self.status['touch_flags'])
             self.erouter.post(touch_event)
 
+    def set_pose(self, x, y, theta):
+        self.x = x
+        self.y = y
+        # bug preventing this from working
+        # self.theta = theta
+        x0, y0, theta0 = x, -y, (360 - theta * 180/pi)  # convert to VEX frame
+        self.robot0.set_pose(x0, y0, theta0)
+
     def update_actuators(self):
         for act in self.actuators.values():
             act.status_update()
@@ -100,7 +108,7 @@ class Robot():
         y = float(gyro['y'])
         threshold = 15
         if (abs(x) > threshold) or (abs(y) > threshold):
-            print(f"*** Gyro  x:{x}  y:{y}")
+            #print(f"*** Gyro  x:{x}  y:{y}")
             return True
         else:
             return False

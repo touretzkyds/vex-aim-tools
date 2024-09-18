@@ -8,7 +8,7 @@ print(f"main thead in {threading.current_thread().native_id}")
 
 global loop
 loop = asyncio.get_event_loop()
-loop.set_debug(True)
+# loop.set_debug(True)
 
 def loopthread():
     global loop
