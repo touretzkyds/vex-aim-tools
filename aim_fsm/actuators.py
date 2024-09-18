@@ -84,6 +84,14 @@ class SoundActuator(Actuator):
         tts.save(filepath)
         self.robot.robot0.play_sound_file(filepath)
 
+    def play_sound(self, node, sound, volume=1):
+        self.lock(node)
+        self.robot.robot0.play_sound(sound, volume)
+
+    def play_sound_file(self, node, filepath):
+        self.lock(node)
+        self.robot.robot0.play_sound_file(filepath)
+
 
 class KickActuator(Actuator):
     KICK_DURATION = 0.25 # seconds

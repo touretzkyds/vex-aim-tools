@@ -54,8 +54,6 @@ class Robot():
         self.y = -float(self.status['robot_x'])
         self.z = 0
         heading = 360 - float(self.status['heading'])
-        if heading == 360:
-            print(f"*** {self.status}")
         if heading > 180:
             heading = heading - 360
         self.theta = heading / 180 * pi
@@ -95,3 +93,14 @@ class Robot():
     def forward(self, distance_mm, drive_speed=None):
         angle_zero = 0
         self.robot0.drive_for(distance_mm, angle_zero, drive_speed=drive_speed, wait=False)
+
+    def is_picked_up(self):
+        gyro = self.status['gyro_rate']
+        x = float(gyro['x'])
+        y = float(gyro['y'])
+        threshold = 15
+        if (abs(x) > threshold) or (abs(y) > threshold):
+            print(f"*** Gyro  x:{x}  y:{y}")
+            return True
+        else:
+            return False

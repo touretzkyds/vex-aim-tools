@@ -178,6 +178,27 @@ class Say(ActionNode):
         self.robot.actuators['sound'].say_text(self, self.utterance)
 
 
+class PlaySound(ActionNode):
+    def __init__(self, sound=vex.SoundType.TOLLBOOTH, volume=1):
+        self.sound = sound
+        self.volume = volume
+        super().__init__()
+
+    def start(self,event=None):
+        super().start(event)
+        self.robot.actuators['sound'].play_sound(self, self.sound, self.volume)
+
+class PlaySoundFile(ActionNode):
+    def __init__(self, filepath):
+        self.filepath = filepath
+        super().__init__()
+
+    def start(self,event=None):
+        super().start(event)
+        self.robot.actuators['sound'].play_sound_file(self, self.filepath)
+
+
+
 class AbortAllActions(StateNode):
     def start(self,event=None):
         super().start(event)

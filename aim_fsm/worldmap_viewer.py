@@ -778,6 +778,23 @@ class WorldMapViewer():
         glEndList()
         gl_lists.append(c)
 
+    def make_ball(self, obj):
+        global gl_lists
+        c = glGenLists(1)
+        glNewList(c, GL_COMPILE)
+        glPushMatrix()
+        glTranslatef(obj.x, obj.y, obj.z)
+        color = (0.9, 0.7, 0.1)
+        glColor4f(*color,1.0)
+        quadric = gluNewQuadric()
+        gluQuadricOrientation(quadric, GLU_OUTSIDE)
+        glScalef(1.0, 1.0, 1.0)
+        radius = obj.diameter / 2.0
+        gluSphere(quadric, radius, 20, 20)
+        glPopMatrix()
+        glEndList()
+        gl_lists.append(c)
+
     def make_vex_robot(self):
         global gl_lists
         c = glGenLists(1)
@@ -798,6 +815,8 @@ class WorldMapViewer():
         for (key,obj) in items:
             if isinstance(obj, (worldmap.OrangeBarrelObj, worldmap.BlueBarrelObj)):
                 self.make_barrel(obj)
+            elif isinstance(obj, worldmap.BallObj):
+                self.make_ball(obj)
             continue
             if isinstance(obj, worldmap.LightCubeObj):
                 self.make_light_cube(obj)
@@ -975,7 +994,7 @@ class WorldMapViewer():
             pitch = camera_rotation[1]
             yaw = camera_rotation[2]
             print('pitch=%5.1f yaw=%5.1f dist=%f' % (pitch,yaw,camera_distance),
-                  ' gazepointt[%5.1f %5.1f %5.1f]' %
+                  ' gazepoint[%5.1f %5.1f %5.1f]' %
                       (fixation_point[0], fixation_point[1], fixation_point[2]),
                   ' camera[%5.1f %5.1f %5.1f]' % (camera_loc[0], camera_loc[1], camera_loc[2]))
         self.display()

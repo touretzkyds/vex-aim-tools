@@ -11,6 +11,8 @@ ARUCO_DICT_4x4_100 = cv2.aruco.DICT_4X4_100
 
 global robot_for_loading
 
+from . import vex
+
 from .evbase import EventRouter
 from .base import StateNode
 from .cam_viewer import CamViewer
@@ -129,19 +131,6 @@ class StateMachineProgram(StateNode):
         self.robot.carrying = None
         self.robot.fetching = None
 
-        # robot.is_picked_up uses just the cliff detector, and can be fooled.
-        # robot.pose.rotation does not encode pitch or roll, only yaw.
-        # So use accelerometer data as our backup method.
-        self.robot.really_picked_up = \
-            (lambda robot :
-             (lambda :
-              robot.is_picked_up
-              or (not robot.is_moving
-                  and (robot.accelerometer.z < 5000
-                       or robot.accelerometer.z > 13000))))(self.robot)
-#                  and (robot.accelerometer.z < 5000
-#                       or robot.accelerometer.z > 10300))))(self.robot)
-
         # World map and path planner
         #self.robot.world.rrt = self.rrt or RRT(self.robot)
 
@@ -188,15 +177,32 @@ class StateMachineProgram(StateNode):
         super().stop()
         self.robot.erouter.clear()
 
-    def poll(self):
-        # Invalidate cube pose if cube has been moving and isn't seen
-        move_duration_regular_threshold = 0.5 # seconds
-        move_duration_fetch_threshold = 1 # seconds
+    def stop_children(self):
+        for node in self.children.values():
+            node.stop()
 
+    def poll(self):
         # Update robot kinematic description
         #self.robot.kine.get_pose()
 
         # Handle robot being picked up or put down
+        if self.robot.is_picked_up():
+            if not self.robot.was_picked_up:
+                self.robot.robot0.stop_drive()
+                self.robot.robot0.play_sound(vex.SoundType.DOOR_CLOSE, 1)
+                self.robot.world_map.clear()
+                self.robot.was_picked_up = True
+                self.stop_children()
+        elif self.robot.was_picked_up:
+            self.robot.was_picked_up = False
+            self.robot.robot0.set_pose(0,0,0)
+            self.robot.x = 0
+            self.robot.y = 0
+            self.robot.theta = 0
+            self.robot.robot0.play_sound(vex.SoundType.TOLLBOOTH, 1)
+            if self.start_node:
+                self.start_node.start()
+
         """
         if self.robot.really_picked_up():
             # robot is in the air

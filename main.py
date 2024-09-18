@@ -22,15 +22,15 @@ th.start()
 global robot
 global robot_for_loading
 
-robot_ip_addr = "192.168.4.1"
 robot_ip_addr = "172.26.167.23"
+robot_ip_addr = "192.168.4.1"
 
 robot = Robot(loop=loop, ip=robot_ip_addr)
 
 evbase.robot_for_loading = robot
 program.robot_for_loading = robot
 
-tracefsm(9)
+tracefsm(0)
 
 robot.loop.call_soon_threadsafe(StateMachineProgram().start)
 
