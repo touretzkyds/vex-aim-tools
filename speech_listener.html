@@ -1,144 +1,152 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
+
+<head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Speech Listener for VEX AIM</title>
-  </head>
-  <body>
+</head>
+
+<body>
     <h1>Speech Listener for VEX AIM</h1>
-    <button id="startStopButton" style="background-color: lime">Start Listening</button><p/>
+    <button id="startStopButton" style="background-color: lime">Start Listening</button>
+    <p />
     <div id="result"></div>
 
     <script>
-      const startStopButton = document.getElementById('startStopButton');
-      const resultDiv = document.getElementById('result');
-      
-      let recognition;
-      let isRecording = false;
-      let utterance_count = 0;
+        const startStopButton = document.getElementById('startStopButton');
+        const resultDiv = document.getElementById('result');
 
-      // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
-      function getTime () {
-	  let date = new Date();
-	  return date.getTime();
-      }
-      const sessionID = String(1000 + Math.round(8999 * Math.random())) + String(getTime());
+        let recognition;
+        let isRecording = false;
+        let utterance_count = 0;
 
-      function sendSessionID() {
-          fetch('http://127.0.0.1:5000/api/set-session-id', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sessionID: sessionID })
-          })
-      }
+        // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
+        function getTime() {
+            let date = new Date();
+            return date.getTime();
+        }
+        const sessionID = String(1000 + Math.round(8999 * Math.random())) + String(getTime());
 
-      function checkSessionID() {
-	  // Make sure we're still the active session.  If not, close the window.
-          let response = fetch('http://127.0.0.1:5000/api/get-session-id', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' }
-          }).then(response => response.json())
-              .then(data => {
-                  console.log('Backend response:', data);
-		  let currentID = data['sessionID'];
-		  if (sessionID != currentID) {
-		      closeSession();
-		  }
-              });
-      }
+        function sendSessionID() {
+            fetch('http://127.0.0.1:5000/api/set-session-id', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionID: sessionID })
+            })
+        }
 
-      function closeSession() {
-	  try {
-	      window.close();
-	  } catch (exception) {}
-	  window.location.href = 'http://127.0.0.1:5000/listener_closed.html';
-      }
+        function checkSessionID() {
+            // Make sure we're still the active session.  If not, close the window.
+            let response = fetch('http://127.0.0.1:5000/api/get-session-id', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            }).then(response => response.json())
+                .then(data => {
+                    console.log('Backend response:', data);
+                    let currentID = data['sessionID'];
+                    if (sessionID != currentID) {
+                        closeSession();
+                    }
+                });
+        }
 
-      function initializeRecognition() {
-	  if (! ('webkitSpeechRecognition' in window)) {
-	      resultDiv.innerHTML = '<font size=+2 color="red"><b>Speech recognition not supported in this browser!</b></font>';
-	      return;
-	  };
+        function closeSession() {
+            try {
+                window.close();
+            } catch (exception) { }
+            window.location.href = 'http://127.0.0.1:5000/listener_closed.html';
+        }
 
-          recognition = new webkitSpeechRecognition();
-          recognition.continuous = true; // Enable continuous recognition
-          recognition.interimResults = false;
-          recognition.lang = 'en-US';
+        function initializeRecognition() {
+            if (!('webkitSpeechRecognition' in window)) {
+                resultDiv.innerHTML = '<font size=+2 color="red"><b>Speech recognition not supported in this browser!</b></font>';
+                return;
+            };
 
-          recognition.onstart = function () {
-              console.log('Speech recognition started');
-          };
+            recognition = new webkitSpeechRecognition();
+            recognition.continuous = true; // Enable continuous recognition
+            recognition.interimResults = false;
+            recognition.lang = 'zh-CN';//zh-CN;en-US
 
-          recognition.onresult = function (event) {
-              const speechResult = event.results[event.resultIndex][0].transcript;
-	      utterance_count += 1;
-              resultDiv.innerText = `Result ${utterance_count}: ${speechResult}`;
-              console.log('Speech result:', speechResult);
+            recognition.onstart = function () {
+                console.log('Speech recognition started');
+            };
 
-              // Send the transcribed text to the Python backend
-              fetch('http://127.0.0.1:5000/api/speech-to-text', {
-                  method: 'POST',
-                  headers: {
-                      'Content-Type': 'application/json'
-                  },
-                  body: JSON.stringify({ text: speechResult })
-              })
-                  .then(response => response.json())
-                  .then(data => {
-                      console.log('Backend response:', data);
-                  })
-                  .catch(error => {
-                      console.error('Error:', error);
-                  });
-          };
+            recognition.onresult = function (event) {
+                const speechResult = event.results[event.resultIndex][0].transcript;
+                
+                utterance_count += 1;
+                resultDiv.innerText = `Result ${utterance_count}: ${speechResult}`;
+                console.log('Speech result:', speechResult);
 
-          recognition.onerror = function (event) {
-              console.error('Speech recognition error:', event.error);
-              if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-                  console.error('Microphone access denied');
-              }
-          };
+                const dialect = sessionStorage.getItem('dialect') || 'mandarin';
 
-          recognition.onend = function () {
-              console.log('Speech recognition ended');
-              if (isRecording) {
-                  console.log('Restarting speech recognition...');
-                  recognition.start(); // Restart recognition if still recording
-              }
-          };
-      }
+                // Send the transcribed text to the Python backend
+                fetch('http://127.0.0.1:5000/api/speech-to-text', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text: speechResult, dialect: dialect })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('Backend response:', data);
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                    });
+            };
 
-      startStopButton.addEventListener('click', () => {
-	  if (! isRecording) {
-              navigator.mediaDevices.getUserMedia({ audio: true })
-		  .then(stream => {
-                      console.log('Microphone access granted');
-                      if (!isRecording) {
-			  initializeRecognition();
-			  recognition.start();
-			  isRecording = true;
-                      }
-		      startStopButton.style.backgroundColor = 'red';
-		      startStopButton.textContent = 'Stop Recording';
-              })
-              .catch(error => {
-                  console.error('Microphone access denied', error);
-              });
-	  } else {
-              if (recognition && isRecording) {
-		  recognition.stop();
-		  isRecording = false;
-              }
-	      startStopButton.style.backgroundColor = 'lime';
-	      startStopButton.textContent = 'Start Recording';
-	  }});
+            recognition.onerror = function (event) {
+                console.error('Speech recognition error:', event.error);
+                if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+                    console.error('Microphone access denied');
+                }
+            };
 
-      // Start up the speech listener service
-      sendSessionID();
-      setInterval(() => { checkSessionID(); }, 2000);
-      startStopButton.click();
-      
+            recognition.onend = function () {
+                console.log('Speech recognition ended');
+                if (isRecording) {
+                    console.log('Restarting speech recognition...');
+                    recognition.start(); // Restart recognition if still recording
+                }
+            };
+        }
+
+        startStopButton.addEventListener('click', () => {
+            if (!isRecording) {
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(stream => {
+                        console.log('Microphone access granted');
+                        if (!isRecording) {
+                            initializeRecognition();
+                            recognition.start();
+                            isRecording = true;
+                        }
+                        startStopButton.style.backgroundColor = 'red';
+                        startStopButton.textContent = 'Stop Recording';
+                    })
+                    .catch(error => {
+                        console.error('Microphone access denied', error);
+                    });
+            } else {
+                if (recognition && isRecording) {
+                    recognition.stop();
+                    isRecording = false;
+                }
+                startStopButton.style.backgroundColor = 'lime';
+                startStopButton.textContent = 'Start Recording';
+            }
+        });
+
+        // Start up the speech listener service
+        sendSessionID();
+        setInterval(() => { checkSessionID(); }, 2000);
+        startStopButton.click();
+
     </script>
-  </body>
+</body>
+
 </html>

@@ -651,9 +651,10 @@ if __name__ == '__main__':
             sys.exit(1)
 
     try:
-        with (open(infile_name) if infile_name != '-' else sys.stdin) as in_f:
+        #with (open(infile_name) if infile_name != '-' else sys.stdin) as in_f:
+        with (open(infile_name, encoding='utf-8') if infile_name != '-' else sys.stdin) as in_f:
             try:
-                with (open(outfile_name,'w') if outfile_name != '-' else sys.stdout) as out_f:
+                with (open(outfile_name,'w', encoding='utf-8') if outfile_name != '-' else sys.stdout) as out_f:
                     process_file()
                     if not found_error:
                         cprint('Wrote generated code to %s.' %
