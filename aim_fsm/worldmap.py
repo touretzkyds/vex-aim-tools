@@ -1,12 +1,16 @@
 import math
 import numpy as np
-import time
 import datetime
 import cv2
-
 from .geometry import *
 from .utils import *
 from .camera import AIVISION_RESOLUTION_SCALE
+# Try to import OccupancyGrid
+try:
+    from perception.occupancy_grid import OccupancyGrid
+except ImportError:
+    print("Warning: perception.occupancy_grid not found")
+    OccupancyGrid = None
 
 class WorldObject():
     def __init__(self, id=None, name=None, x=0, y=0, z=0, theta=None, is_visible=False):
@@ -33,8 +37,7 @@ class WorldObject():
             vis = "missing"
         else:
             vis = "unseen"
-        held = " held" if self.held_by else ""
-        return f'<{self.id or self.name} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f}){held}>'
+        return f'<{self.id or self.name} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f})>'
 
     def update_matched_object(self,robot):
         "Update the matched world_map object with info from this candidate."
@@ -103,7 +106,7 @@ class AprilTagObj(WorldObject):
 
 class ArucoMarkerObj(WorldObject):
     def __init__(self, spec, x=0, y=0, z=0, theta=0):
-        super().__init__(x=x, y=x, z=z, theta=theta)
+        super().__init__(id=spec.get('id'), name=spec.get('name'), x=x, y=y, z=z, theta=theta)
         self.name = spec['name']
         self.marker_id = spec['id']
         self.marker = spec['marker']
@@ -120,6 +123,7 @@ class ArucoMarkerObj(WorldObject):
         
 
 class WallObj(WorldObject):
+
 
     def __init__(self, wall_spec, x=0, y=0, z=0, theta=0):
         super().__init__(x=x, y=y, z=z, theta=theta)
@@ -190,12 +194,16 @@ class DoorwayObj(WorldObject):
 
 class RoomObj(WorldObject):
     def __init__(self, name,
-                 points=np.resize(np.array([0,0,0,1]),(4,4)).transpose(),
-                 floor=1, door_ids=[], connections=[]):
+                 points=np.resize(np.array([0, 0, 0, 1]), (4, 4)).transpose(),
+                 floor=1, door_ids=None, connections=None):
         "points should be four points in homogeneous coordinates forming a convex polygon"
+        if door_ids is None:
+            door_ids = []
+        if connections is None:
+            connections = []
         id = 'Room-' + name
         self.name = name
-        x,y,z,s = points.mean(1)
+        x, y, z, s = points.mean(1)
         super().__init__(id=id, x=x, y=y)
         self.points = points
         self.floor = floor
@@ -210,8 +218,7 @@ class RoomObj(WorldObject):
     def get_bounding_box(self):
         mins = self.points.min(1)
         maxs = self.points.max(1)
-        return ((mins[0],mins[1]), (maxs[0],maxs[1]))
-
+        return ((mins[0], mins[1]), (maxs[0], maxs[1]))
 
 ################################################################
 
@@ -224,8 +231,18 @@ class WorldMap():
         self.missing_objects = []
         self.shared_objects = dict()
         self.name_counts = dict()  # For generating new object names
-        self.last_held_time = -1
         self.visibility_paused = False
+
+        # Phase 7: Occupancy Grid
+        if OccupancyGrid:
+            # Range 5000mm x 5000mm, Resolution 25mm (robust against depth noise)
+            self.occupancy_grid = OccupancyGrid(x_range=(-2500, 2500), y_range=(-2500, 2500), resolution=25.0)
+        else:
+            self.occupancy_grid = None
+
+        # Phase 7: Ghost object tracking - counts frames where object is not visible
+        # Key: object id, Value: number of consecutive frames not visible
+        self.frames_not_visible = dict()
 
     def __repr__(self):
         return f'<WorldMap with {len(self.objects)} objects>'
@@ -237,13 +254,111 @@ class WorldMap():
         self.missing_objects = []
         self.shared_objects.clear()
         self.name_counts.clear()
-        
+        if self.occupancy_grid:
+            self.occupancy_grid.clear()
+
+    def update_grid_from_depth(self, depth_map, intrinsics, extrinsics, robot_pose=None):
+        """Update occupancy grid from depth map and camera parameters.
+
+        This method provides a clean abstraction layer for updating the occupancy grid,
+        handling localization checks and error handling internally.
+
+        Args:
+            depth_map: Depth map (H x W) numpy array in meters
+            intrinsics: CameraIntrinsics object with fx, fy, cx, cy parameters
+            extrinsics: Camera extrinsics transformation (4x4 numpy array)
+            robot_pose: Optional (x, y, theta) tuple in mm/radians.
+                       If None, uses current robot.pose
+
+        Returns:
+            bool: True if grid was updated, False otherwise (not localized, no grid, etc.)
+        """
+        # Check if grid exists
+        if not self.occupancy_grid:
+            return False
+
+        # Check if robot is localized
+        pf = getattr(self.robot, "particle_filter", None)
+        if pf and pf.state != pf.LOCALIZED:
+            print("[update_grid_from_depth] skipped: particle_filter not localized")
+            return False
+
+        # Use current pose if not provided
+        if robot_pose is None:
+            robot_pose = (self.robot.pose.x, self.robot.pose.y, self.robot.pose.theta)
+
+        try:
+            # Update free/occupied space from depth map
+            self.occupancy_grid.update_from_depth(
+                depth_map,
+                intrinsics,
+                extrinsics,
+                robot_pose
+            )
+            return True
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to update occupancy grid from depth: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def mark_cliff_on_grid(self, cliff_segments, robot_pose=None):
+        """Mark cliff polylines on the occupancy grid.
+
+        Args:
+            cliff_segments: List of CliffSegment objects with polyline_world in base frame
+            robot_pose: Optional (x, y, theta) tuple. If None, uses current robot.pose
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not self.occupancy_grid:
+            return False
+
+        # Check if robot is localized
+        pf = getattr(self.robot, "particle_filter", None)
+        if pf and pf.state != pf.LOCALIZED:
+            return False
+
+        # Use current pose if not provided
+        if robot_pose is None:
+            robot_pose = (self.robot.pose.x, self.robot.pose.y, self.robot.pose.theta)
+
+        try:
+            from aim_fsm.geometry import aboutZ, point
+            rotation = aboutZ(robot_pose[2])
+            robot_pos = point(robot_pose[0], robot_pose[1])
+
+            for seg in cliff_segments:
+                if seg.polyline_world is not None:
+                    # Polyline in segment is in BASE frame (meters)
+                    # Convert to World frame (mm)
+                    pts_mm = seg.polyline_world * 1000.0
+
+                    # Transform each point to world frame
+                    world_polyline = []
+                    for pt in pts_mm:
+                        pt_vec = point(pt[0], pt[1])
+                        w_pt = rotation.dot(pt_vec) + robot_pos
+                        world_polyline.append((float(w_pt[0,0]), float(w_pt[1,0])))
+
+                    # Mark on grid
+                    self.occupancy_grid.mark_cliff_polyline(world_polyline, is_cliff=True)
+
+            return True
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to mark cliff on grid: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def pause_visibility(self, value=True):
         """Turn off visibility of objects when the robot is moving.  We won't
         turn it back on until the robot has stopped AND we have processed a new
         camera frame so visibilities are updated."""
-        if self.visibility_paused != value:
-            self.visibility_paused = value
+        self.visibility_paused = value
 
     def update(self):
         self.updated_objects = []
@@ -530,14 +645,56 @@ class WorldMap():
         return result
 
     def detect_missing_objects(self):
+        # Threshold: Mark object as missing after this many consecutive invisible frames
+        MISSING_FRAME_THRESHOLD = 10
+
         for obj in self.objects.values():
             if not isinstance(obj, (ArucoMarkerObj,WallObj,DoorwayObj)) and \
                obj not in self.updated_objects and self.should_be_visible(obj):
-                if obj not in self.missing_objects:
-                    obj.is_visible = False
-                    obj.is_missing = True
-                    self.missing_objects.append(obj)
-                    #print('missing object:', obj)
+
+                # Phase 7: Two-tier ghost object elimination strategy
+                # 1. EXPLICIT CLEARING: If grid confirms area is FREE (ground seen) → immediate deletion
+                # 2. TEMPORAL FALLBACK: If grid is UNKNOWN but object not seen for N frames → eventual deletion
+
+                confirmed_missing = False
+
+                if self.occupancy_grid:
+                    # Use object radius or default 25mm
+                    radius = getattr(obj, 'diameter', 50.0) / 2
+
+                    # Strategy 1: Explicit clearing (mentor's primary requirement)
+                    # "Ghost objects should be eliminated only when we actually look at
+                    #  the location and see that it is no longer there"
+                    if self.occupancy_grid.is_area_free(obj.pose.x, obj.pose.y, radius):
+                        confirmed_missing = True  # Saw ground, object definitely gone
+                    else:
+                        # Strategy 2: Temporal fallback for unobserved areas
+                        # If area is UNKNOWN (never observed), use time-based heuristic
+                        # to prevent ghost objects from persisting forever
+                        obj_id = id(obj)
+                        self.frames_not_visible[obj_id] = self.frames_not_visible.get(obj_id, 0) + 1
+
+                        if self.frames_not_visible[obj_id] >= MISSING_FRAME_THRESHOLD:
+                            confirmed_missing = True  # Unseen too long, probably gone
+                else:
+                    # No occupancy grid - fall back to immediate removal (original behavior)
+                    confirmed_missing = True
+
+                if confirmed_missing:
+                    if obj not in self.missing_objects:
+                        obj.is_visible = False
+                        obj.is_missing = True
+                        self.missing_objects.append(obj)
+                        # Clean up tracking dict
+                        obj_id = id(obj)
+                        if obj_id in self.frames_not_visible:
+                            del self.frames_not_visible[obj_id]
+                        #print('missing object:', obj)
+            else:
+                # Object is visible or was updated - reset counter
+                obj_id = id(obj)
+                if obj_id in self.frames_not_visible:
+                    self.frames_not_visible[obj_id] = 0
 
     def process_unassociated_objects(self):
         """
@@ -625,19 +782,13 @@ class WorldMap():
             self.confirm_not_holding()
 
     def confirm_still_holding(self):
-        MIN_UNHOLDING_TIME = 0.5  # seconds
-        t = time.time()
         if (isinstance(self.robot.holding, BarrelObj) and self.robot.robot0.has_any_barrel()) or \
             (isinstance(self.robot.holding, SportsBallObj) and self.robot.robot0.has_sports_ball()):
-            self.last_held_time = t
+                return
         else:
-            if t - self.last_held_time > MIN_UNHOLDING_TIME:
-                # held object has been gone long enough
-                print('No longer holding', self.robot.holding)
-                self.robot.holding.held_by = None
-                self.robot.holding = None
-            else:
-                pass # wait a bit to see if held object comes back
+            print('No longer holding', self.robot.holding)
+            self.robot.holding.held_by = None
+            self.robot.holding = None
 
     def confirm_not_holding(self):
         if not (self.robot.robot0.has_any_barrel() or self.robot.robot0.has_sports_ball()):

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+import numpy as np
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSlot
 from PyQt6.QtGui import QGuiApplication, QImage
@@ -12,8 +16,12 @@ from PyQt6.QtQuick import QQuickView
 from aim_fsm.camera import AIVISION_RESOLUTION_SCALE
 
 from .camera_provider import CameraImageProvider
+from .cliff_overlay import CliffOverlay, CliffOverlayConfig
 from .help_texts import CAMERA_HELP_TEXT
 from .snapshot_service import SnapshotService
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class CamViewer(QObject):
@@ -26,6 +34,10 @@ class CamViewer(QObject):
         height: int = 480,
         user_annotate_function: Optional[Any] = None,
         windowName: str = "Robot View",
+        *,
+        cliff_overlay: Optional[CliffOverlay] = None,
+        cliff_overlay_enabled: Optional[bool] = None,
+        cliff_overlay_config: Optional[CliffOverlayConfig] = None,
     ) -> None:
         super().__init__(parent=None)
         if robot is None:
@@ -34,7 +46,9 @@ class CamViewer(QObject):
         self._robot = robot
         self._width = int(width)
         self._height = int(height)
-        self._user_hook = user_annotate_function
+        self._raw_user_hook: Optional[Callable[[np.ndarray], np.ndarray]] = (
+            user_annotate_function if callable(user_annotate_function) else None
+        )
         self._window_title = windowName
 
         self._app = QGuiApplication.instance() or QGuiApplication([])
@@ -44,8 +58,13 @@ class CamViewer(QObject):
         self._provider.set_robot_ref(robot)
         self._provider.set_status(self._resolve_status())
         self._provider.set_aruco_detector(getattr(robot, "aruco_detector", None))
-        if user_annotate_function is not None:
-            self._provider.set_user_hook(user_annotate_function)
+        self._cliff_overlay = self._initialise_cliff_overlay(
+            explicit=cliff_overlay,
+            enabled_override=cliff_overlay_enabled,
+            config_override=cliff_overlay_config,
+        )
+        self._active_user_hook: Optional[Callable[[np.ndarray], np.ndarray]] = None
+        self._install_user_hook()
         self._provider.set_crosshair_enabled(self._crosshairs)
         self._provider.register_notifier(self._queue_frame_bump)
 
@@ -159,8 +178,7 @@ class CamViewer(QObject):
 
         self._provider.set_status(self._resolve_status())
         self._provider.set_aruco_detector(getattr(self._robot, "aruco_detector", None))
-        if self._user_hook is not None:
-            self._provider.set_user_hook(self._user_hook)
+        self._install_user_hook()
 
         self._provider.update_live_frame(image)
         self._last_frame_id = frame_id
@@ -207,6 +225,74 @@ class CamViewer(QObject):
                 root.setProperty("showCrosshair", self._crosshairs)
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Cliff overlay helpers
+
+    def _initialise_cliff_overlay(
+        self,
+        *,
+        explicit: Optional[CliffOverlay],
+        enabled_override: Optional[bool],
+        config_override: Optional[CliffOverlayConfig],
+    ) -> Optional[CliffOverlay]:
+        if explicit is not None:
+            return explicit if explicit.enabled else None
+
+        env_flag = os.environ.get("DEPTHANYTHING_OVERLAY", "").strip()
+        if enabled_override is not None:
+            enable_overlay = bool(enabled_override)
+        elif env_flag:
+            enable_overlay = env_flag not in {"0", "false", "False"}
+        else:
+            enable_overlay = False
+
+        if not enable_overlay:
+            return None
+
+        overlay = CliffOverlay.build_default(config=config_override)
+        if not overlay.enabled:
+            _LOGGER.warning("Cliff overlay disabled (DepthAnything provider unavailable)")
+            return None
+        _LOGGER.info("Cliff overlay enabled")
+        return overlay
+
+    def _compose_hooks(self) -> Optional[Callable[[np.ndarray], np.ndarray]]:
+        hooks: list[Callable[[np.ndarray], np.ndarray]] = []
+        if self._raw_user_hook is not None:
+            hooks.append(self._raw_user_hook)
+        if self._cliff_overlay is not None and getattr(self._cliff_overlay, "enabled", False):
+            hooks.append(self._cliff_overlay)
+        if not hooks:
+            return None
+
+        def _composed(image: np.ndarray) -> np.ndarray:
+            result = image
+            for hook in hooks:
+                try:
+                    maybe = hook(result)
+                    if isinstance(maybe, np.ndarray) and maybe.ndim == 3:
+                        result = maybe
+                except Exception:  # pragma: no cover - defensive
+                    _LOGGER.warning("Camera overlay hook %r failed", hook, exc_info=True)
+            return result
+
+        return _composed
+
+    def _install_user_hook(self) -> None:
+        composed = self._compose_hooks()
+        if composed is self._active_user_hook:
+            return
+        self._active_user_hook = composed
+        self._provider.set_user_hook(composed)
+
+    # Public API -------------------------------------------------------
+
+    def set_cliff_overlay(self, overlay: Optional[CliffOverlay]) -> None:
+        """Install or remove the cliff overlay at runtime."""
+
+        self._cliff_overlay = overlay if overlay and overlay.enabled else None
+        self._install_user_hook()
 
 
 __all__ = ["CamViewer"]

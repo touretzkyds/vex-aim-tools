@@ -13,6 +13,7 @@ from PyQt6.QtQml import QQmlContext
 from aim_fsm.camera import AIVISION_RESOLUTION_SCALE
 
 from .camera_provider import CameraImageProvider
+from .grid_provider import OccupancyGridProvider
 from .snapshot_service import SnapshotService
 from .worldmap_model import WorldMapModel
 from .help_texts import CAMERA_HELP_TEXT
@@ -47,6 +48,12 @@ class QtViewerApp(QObject):
         self._app = QGuiApplication.instance() or QGuiApplication([])
         self._model = model or WorldMapModel()
         self._camera_provider = camera_provider or CameraImageProvider()
+        self._grid_provider = OccupancyGridProvider()
+        
+        # Connect grid provider
+        if self._worldmap and hasattr(self._worldmap, 'occupancy_grid'):
+            self._grid_provider.set_grid(self._worldmap.occupancy_grid)
+
         self._wscale = float(wscale)
         self._snapshot_service = snapshot_service or SnapshotService()
         self._snapshot_service.enable_disk_write(snapshots_enabled)
@@ -89,6 +96,10 @@ class QtViewerApp(QObject):
         except Exception:
             # Debug output belongs to the caller; swallow to keep viewer resilient.
             pass
+
+        if self._worldmap and hasattr(self._worldmap, 'occupancy_grid'):
+            self._grid_provider.set_grid(self._worldmap.occupancy_grid)
+
         objects = getattr(self._worldmap, "objects", {}) or {}
         self._model.sync_from(self._robot, objects)
 
@@ -139,8 +150,24 @@ class QtViewerApp(QObject):
         engine = self._view.engine()
         engine.addImportPath(str(qml_dir))
         engine.addImageProvider("camera", self._camera_provider)
+        engine.addImageProvider("grid", self._grid_provider)
 
         context = self._view.rootContext()
+        
+        # Expose Grid Properties
+        grid = getattr(self._worldmap, 'occupancy_grid', None)
+        if grid:
+            context.setContextProperty("GRID_X_MIN", float(grid.x_min))
+            context.setContextProperty("GRID_Y_MIN", float(grid.y_min))
+            context.setContextProperty("GRID_WIDTH_MM", float(grid.x_max - grid.x_min))
+            context.setContextProperty("GRID_HEIGHT_MM", float(grid.y_max - grid.y_min))
+        else:
+            # Defaults matching OccupancyGrid defaults
+            context.setContextProperty("GRID_X_MIN", -2500.0)
+            context.setContextProperty("GRID_Y_MIN", -2500.0)
+            context.setContextProperty("GRID_WIDTH_MM", 5000.0)
+            context.setContextProperty("GRID_HEIGHT_MM", 5000.0)
+
         context.setContextProperty("worldModel", self._model)
         context.setContextProperty("WSCALE", self._wscale)
         context.setContextProperty("AIVISION_RESOLUTION_SCALE", float(AIVISION_RESOLUTION_SCALE))

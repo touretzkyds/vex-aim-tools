@@ -26,6 +26,8 @@ import traceback
 from importlib import __import__, reload
 from queue import Empty, SimpleQueue
 
+_qt_needs_processing = False
+
 try:
     from termcolor import cprint
 except:
@@ -72,6 +74,7 @@ if '.' not in sys.path:
 
 ans = None
 RUNNING = True
+_qt_busy = False
 
 
 def runfsm(module_name):
@@ -107,7 +110,10 @@ def _prime_default_viewers(program, launch_overrides=None):
 
     flags = launch_overrides or {}
     if flags.get('cam', getattr(program, 'launch_cam_viewer', False)):
-        _ensure_viewer('cam_viewer', lambda: CamViewer(target_robot))
+        # Enable cliff overlay in cached mode (reads from robot.cliff_results, no detector)
+        from viewer.cliff_overlay import CliffOverlay
+        cliff_overlay = CliffOverlay(detector=None, robot=target_robot)
+        _ensure_viewer('cam_viewer', lambda: CamViewer(target_robot, cliff_overlay=cliff_overlay))
 
     if flags.get('worldmap', getattr(program, 'launch_worldmap_viewer', False)):
         _ensure_viewer('worldmap_viewer', lambda: WorldMapViewer(target_robot))
@@ -181,6 +187,16 @@ def _process_pending_viewer_launches(timeout=0.0):
         remaining = deadline - time.monotonic()
         if remaining <= 0.0:
             break
+
+        # Process Qt events while waiting for viewer launch
+        try:
+            from PyQt6.QtGui import QGuiApplication
+            app = QGuiApplication.instance()
+            if app:
+                app.processEvents()
+        except ImportError:
+            pass
+
         time.sleep(min(0.01, remaining))
 
 def cli_loop(_robot):
@@ -212,6 +228,19 @@ def cli_loop(_robot):
             running_fsm = aim_fsm.program.running_fsm
             _process_pending_viewer_launches()
             readline.write_history_file(histfile)
+
+            # Process Qt events if signal requested it
+            global _qt_needs_processing
+            if _qt_needs_processing:
+                _qt_needs_processing = False
+                try:
+                    from PyQt6.QtGui import QGuiApplication
+                    app = QGuiApplication.instance()
+                    if app:
+                        app.processEvents()
+                except ImportError:
+                    pass
+
             try:
                 sys.stdout.flush()
                 cli_loop._line = cli_loop._console.raw_input('C> ').strip()
@@ -253,6 +282,22 @@ def cli_loop(_robot):
         elif cli_loop._line[0:5] == 'stop ' or cli_loop._line == 'stop':
             stop_args = cli_loop._line[5:].split(' ')
             stop_stuff(stop_args)
+            continue
+        elif cli_loop._line[0:13] == 'detect_cliff ' or cli_loop._line == 'detect_cliff':
+            detect_cliff_args = cli_loop._line[13:].split(' ')
+            detect_cliff(detect_cliff_args)
+            continue
+        elif cli_loop._line[0:12] == 'clear_cliffs' or cli_loop._line == 'clear_cliffs':
+            clear_cliff_args = cli_loop._line[12:].split(' ')
+            clear_cliffs(clear_cliff_args)
+            continue
+        elif cli_loop._line[0:9] == 'scan_map ' or cli_loop._line == 'scan_map':
+            scan_map_args = cli_loop._line[9:].split(' ')
+            scan_map(scan_map_args)
+            continue
+        elif cli_loop._line[0:14] == 'start_mapping ' or cli_loop._line == 'start_mapping':
+            start_mapping_args = cli_loop._line[14:].split(' ')
+            start_mapping(start_mapping_args)
             continue
         cli_loop._do_await = False
         if cli_loop._line[0:7] == 'import ' or cli_loop._line[0:5] == 'from '  or \
@@ -336,7 +381,9 @@ def show_stuff(args):
     elif spec == 'cam_viewer' or spec=='viewer':
         if running_fsm:
             running_fsm.cam_viewer = True
-        _ensure_viewer('cam_viewer', lambda: CamViewer(robot))
+        from viewer.cliff_overlay import CliffOverlay
+        cliff_overlay = CliffOverlay(detector=None, robot=robot)
+        _ensure_viewer('cam_viewer', lambda: CamViewer(robot, cliff_overlay=cliff_overlay))
     elif spec == "crosshairs":
         robot.cam_viewer.crosshairs = not robot.cam_viewer.crosshairs
     elif spec == "particle_viewer":
@@ -348,7 +395,9 @@ def show_stuff(args):
     elif (spec == "all") or (spec == "all_viewers"):
         if running_fsm:
             running_fsm.cam_viewer = True
-        _ensure_viewer('cam_viewer', lambda: CamViewer(robot))
+        from viewer.cliff_overlay import CliffOverlay
+        cliff_overlay = CliffOverlay(detector=None, robot=robot)
+        _ensure_viewer('cam_viewer', lambda: CamViewer(robot, cliff_overlay=cliff_overlay))
         _ensure_viewer('worldmap_viewer', lambda: WorldMapViewer(robot))
         _ensure_viewer('particle_viewer', lambda: ParticleViewer(robot))
         _ensure_viewer('path_viewer', lambda: PathViewer(robot))
@@ -497,6 +546,343 @@ def start_stuff(args):
 def stop_stuff(args):
     print('not yet implemented')
 
+def clear_cliffs(args):
+    """Clear all accumulated cliff detection results.
+
+    Usage:
+        clear_cliffs    # Clear all cliff history
+    """
+    if hasattr(robot, 'cliff_sessions'):
+        num_sessions = len(robot.cliff_sessions)
+        robot.cliff_sessions = []
+        robot.cliff_results = None
+        robot.cliff_timestamp = None
+        print(f"Cleared {num_sessions} cliff detection session(s)")
+    else:
+        print("No cliff detection history found")
+
+def detect_cliff(args):
+    """Run cliff detection behavior to capture frames and detect cliff edges.
+
+    Usage:
+        detect_cliff          # Capture 5 frames (default)
+        detect_cliff 10       # Capture 10 frames
+        detect_cliff 3 save   # Capture 3 frames and save to disk
+    """
+    # Configure logging to show INFO level messages
+    # Note: Remove any existing handlers first to ensure our config takes effect
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    if not root_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter('%(levelname)s:%(name)s: %(message)s'))
+        root_logger.addHandler(handler)
+
+    try:
+        from aim_fsm.cliff_behavior import DetectCliff
+    except ImportError as exc:
+        print(f"Error: Could not import DetectCliff behavior: {exc}")
+        print("Make sure aim_fsm/cliff_behavior.py exists")
+        return
+
+    # Parse arguments
+    num_frames = 5  # default
+    save_frames = False
+
+    if len(args) > 0 and args[0]:
+        try:
+            num_frames = int(args[0])
+        except ValueError:
+            print(f"Error: Invalid number of frames: {args[0]}")
+            return
+
+    if len(args) > 1 and args[1] == 'save':
+        save_frames = True
+
+    # Create behavior
+    print(f"\nPreparing cliff detection (capturing {num_frames} frames)...")
+    if save_frames:
+        print("  Frames will be saved to cliff_frames/")
+
+    behavior = DetectCliff(num_frames=num_frames, save_frames=save_frames)
+
+    # Set parent to running_fsm (required for FSM integration)
+    if running_fsm is None:
+        print("Error: No running FSM found. Please start a program first.")
+        return
+
+    behavior.set_parent(running_fsm)
+
+    # Pre-initialize detector in CLI thread (NOT in event loop)
+    # This avoids blocking the event loop during model loading
+    print("Initializing DepthAnything detector (this may take 5-30 seconds)...")
+    try:
+        behavior.detector = behavior._initialize_detector()
+        print("Detector ready!")
+    except Exception as exc:
+        print(f"Error initializing detector: {exc}")
+        import traceback
+        traceback.print_exc()
+        return
+
+    # Start the behavior in event loop
+    print("Starting frame capture...")
+    print(f"[DEBUG] behavior.robot exists: {hasattr(behavior, 'robot')}")
+    print(f"[DEBUG] behavior._robot exists: {hasattr(behavior, '_robot')}")
+    if hasattr(behavior, 'robot'):
+        print(f"[DEBUG] behavior.robot = {behavior.robot}")
+    print(f"[DEBUG] About to call robot.loop.call_soon_threadsafe(behavior.start)")
+    try:
+        robot.loop.call_soon_threadsafe(behavior.start)
+        print("Cliff detection behavior started. Capturing frames in background.")
+        print("Results will be stored in robot.cliff_results when complete.")
+        print("[DEBUG] call_soon_threadsafe returned successfully")
+    except Exception as exc:
+        print(f"Error starting behavior: {exc}")
+        import traceback
+        traceback.print_exc()
+
+def scan_map(args):
+    """Run 360-degree scan to build occupancy grid map.
+
+    Usage:
+        scan_map              # 360 degree scan at 30 deg/s (default)
+        scan_map 180          # 180 degree scan
+        scan_map 360 45       # 360 degree scan at 45 deg/s
+    """
+    # Configure logging
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    if not root_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter('%(levelname)s:%(name)s: %(message)s'))
+        root_logger.addHandler(handler)
+
+    try:
+        from aim_fsm.mapping_behavior import ScanAndMap
+    except ImportError as exc:
+        print(f"Error: Could not import ScanAndMap behavior: {exc}")
+        print("Make sure aim_fsm/mapping_behavior.py exists")
+        return
+
+    # Parse arguments
+    angle = 360  # default
+    speed = 30   # default deg/s
+
+    if len(args) > 0 and args[0]:
+        try:
+            angle = int(args[0])
+        except ValueError:
+            print(f"Error: Invalid angle: {args[0]}")
+            return
+
+    if len(args) > 1 and args[1]:
+        try:
+            speed = int(args[1])
+        except ValueError:
+            print(f"Error: Invalid speed: {args[1]}")
+            return
+
+    # Check if grid exists
+    if not hasattr(robot.world_map, 'occupancy_grid') or robot.world_map.occupancy_grid is None:
+        print("Error: Occupancy grid not initialized in WorldMap")
+        return
+
+    # Pre-initialize detector in CLI thread (avoid blocking robot.loop event loop)
+    print("Initializing DepthAnything detector (this may take 5-30 seconds)...")
+    try:
+        from pathlib import Path
+        from perception import CliffDetector, DepthAnythingProvider, load_cliff_calibration
+
+        provider_mode = os.environ.get("DEPTHANYTHING_PROVIDER", "dummy").lower()
+
+        if provider_mode == "dummy":
+            print("WARNING: Using dummy DepthAnything provider (no real detection)")
+            provider = DepthAnythingProvider.build_dummy()
+        elif provider_mode == "torch":
+            weights_env = os.environ.get("DEPTHANYTHING_WEIGHTS")
+            if not weights_env:
+                print("Error: DEPTHANYTHING_WEIGHTS must be set for torch provider")
+                return
+
+            provider = DepthAnythingProvider.from_torch(
+                weights_path=Path(weights_env),
+                model_type=os.environ.get("DEPTHANYTHING_MODEL", "depthanything-v2-small"),
+                device=os.environ.get("DEPTHANYTHING_DEVICE", "cpu"),
+            )
+        else:
+            print(f"Error: Unsupported DEPTHANYTHING_PROVIDER={provider_mode}")
+            return
+
+        camera = getattr(robot, "camera", None)
+        calibration = load_cliff_calibration(camera)
+
+        detector = CliffDetector(
+            depth_provider=provider,
+            intrinsics=calibration.intrinsics,
+            gravity_camera=calibration.gravity_camera,
+            extrinsics=calibration.camera_to_base,
+        )
+        print("Detector ready!")
+    except Exception as exc:
+        print(f"Error initializing detector: {exc}")
+        import traceback
+        traceback.print_exc()
+        return
+
+    # Create behavior
+    print(f"\nPreparing occupancy grid scan ({angle}° at {speed} deg/s)...")
+    print("  Grid will be updated as robot rotates")
+    print("  Open WorldMapViewer to see the grid visualization")
+
+    behavior = ScanAndMap(angle=angle, speed=speed, detector=detector)
+
+    # Set parent to running_fsm
+    if running_fsm is None:
+        print("Error: No running FSM found. Please start a program first.")
+        return
+
+    behavior.set_parent(running_fsm)
+
+    # Start the behavior
+    print("Starting scan and map...")
+    try:
+        robot.loop.call_soon_threadsafe(behavior.start)
+        print(f"Scan started! Robot will rotate {angle} degrees while building map.")
+        print("Grid updates will appear in WorldMapViewer (if open).")
+    except Exception as exc:
+        print(f"Error starting behavior: {exc}")
+        import traceback
+        traceback.print_exc()
+
+def start_mapping(args):
+    """Start continuous occupancy grid mapping.
+
+    Usage:
+        start_mapping           # Run indefinitely
+        start_mapping 30        # Run for 30 seconds
+        start_mapping 60 0.3    # Run for 60s with 0.3s frame interval
+    """
+    # Configure logging
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    if not root_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter('%(levelname)s:%(name)s: %(message)s'))
+        root_logger.addHandler(handler)
+
+    try:
+        from aim_fsm.mapping_behavior import UpdateOccupancyGrid
+    except ImportError as exc:
+        print(f"Error: Could not import UpdateOccupancyGrid behavior: {exc}")
+        print("Make sure aim_fsm/mapping_behavior.py exists")
+        return
+
+    # Parse arguments
+    duration = None  # default: run indefinitely
+    frame_interval = 0.5  # default
+
+    if len(args) > 0 and args[0]:
+        try:
+            duration = float(args[0])
+        except ValueError:
+            print(f"Error: Invalid duration: {args[0]}")
+            return
+
+    if len(args) > 1 and args[1]:
+        try:
+            frame_interval = float(args[1])
+        except ValueError:
+            print(f"Error: Invalid frame interval: {args[1]}")
+            return
+
+    # Check if grid exists
+    if not hasattr(robot.world_map, 'occupancy_grid') or robot.world_map.occupancy_grid is None:
+        print("Error: Occupancy grid not initialized in WorldMap")
+        return
+
+    # Create behavior
+    duration_str = f"{duration}s" if duration else "indefinitely"
+    print(f"\nPreparing continuous mapping (run {duration_str}, interval={frame_interval}s)...")
+    print("  Grid will be updated as robot captures camera frames")
+    print("  Use with Wander or other movement behaviors for best results")
+    print("  Open WorldMapViewer to see the grid visualization")
+
+    behavior = UpdateOccupancyGrid(
+        frame_interval=frame_interval,
+        duration=duration,
+        update_cliffs=True
+    )
+
+    # Set parent to running_fsm
+    if running_fsm is None:
+        print("Error: No running FSM found. Please start a program first.")
+        return
+
+    behavior.set_parent(running_fsm)
+
+    # Pre-initialize detector (same as detect_cliff)
+    print("Initializing DepthAnything detector (this may take 5-30 seconds)...")
+    try:
+        # Initialize detector in CLI thread to avoid blocking event loop
+        import os
+        from pathlib import Path
+        from perception import DepthAnythingProvider, load_cliff_calibration
+
+        # Get provider from environment
+        provider_mode = os.environ.get("DEPTHANYTHING_PROVIDER", "dummy").lower()
+
+        if provider_mode == "dummy":
+            print("WARNING: Using dummy DepthAnything provider (no real detection)")
+            provider = DepthAnythingProvider.build_dummy()
+        elif provider_mode == "torch":
+            weights_env = os.environ.get("DEPTHANYTHING_WEIGHTS")
+            if not weights_env:
+                print("Error: DEPTHANYTHING_WEIGHTS must be set for torch provider")
+                return
+
+            provider = DepthAnythingProvider.from_torch(
+                weights_path=Path(weights_env),
+                model_type=os.environ.get("DEPTHANYTHING_MODEL", "depthanything-v2-small"),
+                device=os.environ.get("DEPTHANYTHING_DEVICE", "cpu"),
+            )
+        else:
+            print(f"Error: Unsupported DEPTHANYTHING_PROVIDER={provider_mode}")
+            return
+
+        # Get calibration
+        from perception import CliffDetector
+        camera = getattr(robot, "camera", None)
+        calibration = load_cliff_calibration(camera)
+
+        # Create detector
+        behavior.detector = CliffDetector(
+            depth_provider=provider,
+            intrinsics=calibration.intrinsics,
+            gravity_camera=calibration.gravity_camera,
+            extrinsics=calibration.camera_to_base,
+        )
+        print("Detector ready!")
+    except Exception as exc:
+        print(f"Error initializing detector: {exc}")
+        import traceback
+        traceback.print_exc()
+        return
+
+    # Start the behavior
+    print("Starting continuous mapping...")
+    try:
+        robot.loop.call_soon_threadsafe(behavior.start)
+        if duration:
+            print(f"Mapping started! Will run for {duration} seconds.")
+        else:
+            print("Mapping started! Running indefinitely (stop with Ctrl+C or robot.stop()).")
+        print("Grid updates will appear in WorldMapViewer (if open).")
+    except Exception as exc:
+        print(f"Error starting behavior: {exc}")
+        import traceback
+        traceback.print_exc()
+
 def do_reload(module_name):
     the_module = None
     try:
@@ -539,6 +925,16 @@ def loopthread():
 th = threading.Thread(target=loopthread)
 th.daemon = True
 th.start()
+
+# Set up periodic Qt event processing (for viewers)
+def _qt_event_handler(signum, frame):
+    """Signal handler - only set flag, never call Qt here."""
+    global _qt_needs_processing
+    _qt_needs_processing = True
+
+import signal
+signal.signal(signal.SIGALRM, _qt_event_handler)
+signal.setitimer(signal.ITIMER_REAL, 0.05, 0.05)  # 50ms
 
 if 'ROBOT' in os.environ:
     robot_address = os.environ['ROBOT']

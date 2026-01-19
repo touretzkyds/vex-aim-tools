@@ -25,6 +25,16 @@ View3D {
     property real cameraDistanceGl: 10
     property vector3d cameraPosition: Qt.vector3d(0, 0, 0)
 
+    // Grid frame counter (NO binding - updated via function call from Python)
+    property int localGridFrameId: 0
+
+    // Function to update grid frame (called from Python, breaks binding loop)
+    function updateGridFrame(newId) {
+        if (localGridFrameId !== newId) {
+            localGridFrameId = newId
+        }
+    }
+
     onScenePositionChanged: updateCamera()
     onSceneYawDegChanged: updateCamera()
     onCameraPitchDegChanged: updateCamera()
@@ -257,6 +267,46 @@ View3D {
                     }
                 }
 
+                // Occupancy Grid Visualization
+                // Hidden 2D image pulls from the image provider; Quick3D then uses it as a texture.
+                Image {
+                    id: gridImage
+                    source: "image://grid/map?v=" + worldView.localGridFrameId
+                    visible: false
+                    // Use default caching; versioned source busts cache when gridFrameId changes
+                    smooth: false
+                    asynchronous: true  // Prevent UI blocking during texture load
+                }
+
+                Model {
+                    id: occupancyGrid
+                    source: "#Rectangle"
+                    
+                    property real gMinX: typeof GRID_X_MIN !== "undefined" ? GRID_X_MIN : -2500
+                    property real gMinY: typeof GRID_Y_MIN !== "undefined" ? GRID_Y_MIN : -2500
+                    property real gWidth: typeof GRID_WIDTH_MM !== "undefined" ? GRID_WIDTH_MM : 5000
+                    property real gHeight: typeof GRID_HEIGHT_MM !== "undefined" ? GRID_HEIGHT_MM : 5000
+                    
+                    property real cx: gMinX + gWidth / 2
+                    property real cy: gMinY + gHeight / 2
+                    
+                    // Place just above the ground plane (top at z=0) to keep it visible
+                    position: Qt.vector3d(cx, cy, 1)
+                    
+                    // #Rectangle is 100x100. Scale to grid size.
+                    scale: Qt.vector3d(gWidth / 100, gHeight / 100, 1)
+                    
+                    materials: PrincipledMaterial {
+                        baseColor: "#ffffff"
+                        baseColorMap: Texture {
+                            sourceItem: gridImage
+                        }
+                        alphaMode: PrincipledMaterial.Blend
+                        cullMode: Material.NoCulling
+                        lighting: PrincipledMaterial.NoLighting
+                    }
+                }
+
                 // Floor grid lines - extended range (100mm spacing, ±3000mm range for better visibility)
                 Node {
                     id: floorGrid
@@ -303,7 +353,7 @@ View3D {
                     id: axes
                     visible: showAxes
                     readonly property real axisLengthMm: 100  // 100mm (10cm) matching legacy
-                    readonly property real axisThicknessMm: 2   // 1mm thin lines matching legacy
+                    readonly property real axisThicknessMm: 2   // Slightly thicker lines for better visibility
 
                     // X-axis (red) - extends from origin to +X direction
                     Model {
@@ -346,7 +396,6 @@ View3D {
         id: robotDelegate
         Node {
             property var model
-            parent: sceneFrame
             visible: !model.missing
             // VEX robot: radius=32mm, height=72mm (legacy make_vex_robot)
             readonly property real radiusMm: 32
@@ -391,7 +440,6 @@ View3D {
         id: ballDelegate
         Node {
             property var model
-            parent: sceneFrame
             visible: !model.missing
             readonly property real radiusMm: (model.diameter_mm || 25) / 2
             // Use model.z which is already computed in Python (diameter/2)
@@ -417,7 +465,6 @@ View3D {
         id: barrelDelegate
         Node {
             property var model
-            parent: sceneFrame
             visible: !model.missing
             readonly property real radiusMm: (model.diameter_mm || 22) / 2
             readonly property real heightMm: model.height_mm || 25
@@ -459,7 +506,6 @@ View3D {
         id: markerDelegate
         Node {
             property var model
-            parent: sceneFrame
             visible: !model.missing
             // Legacy AprilTag: width=38mm (Y-axis), height=48mm (Z-axis), thickness=2mm (X-axis)
             readonly property real widthMm: model.width_mm || 38
@@ -547,10 +593,34 @@ View3D {
     }
 
     Component {
+        id: cliffPointDelegate
+        Node {
+            property var model
+            visible: !model.missing
+            readonly property real radiusMm: (model.diameter_mm || 6) / 2
+            // Pearl sits on ground (z already adjusted in Python)
+            position: Qt.vector3d(model.x, model.y, model.z)
+
+            Model {
+                source: "#Sphere"
+                // Qt Quick 3D #Sphere: diameter=100. Scale to mm diameter.
+                scale: Qt.vector3d(parent.radiusMm * 2 / 100, parent.radiusMm * 2 / 100, parent.radiusMm * 2 / 100)
+                materials: PrincipledMaterial {
+                    // Bright red glowing pearls for cliff edges
+                    baseColor: "#ff0000"  // Pure red
+                    roughness: 0.2  // Shiny like a pearl
+                    metalness: 0.0
+                    cullMode: Material.NoCulling
+                    emissiveFactor: Qt.vector3d(0.4, 0.0, 0.0)  // Strong red glow
+                }
+            }
+        }
+    }
+
+    Component {
         id: wallDelegate
         Node {
             property var model
-            parent: sceneFrame
             visible: !model.missing
             readonly property real lengthMm: model.length_mm || 300
             readonly property real heightMm: model.height_mm || 210
@@ -564,10 +634,21 @@ View3D {
                 // Qt Quick 3D #Cube: edge length=100
                 scale: Qt.vector3d(thicknessMm / 100, lengthMm / 100, heightMm / 100)
                 materials: PrincipledMaterial {
-                    baseColor: model.visible ? "#777777" : "#444444"
-                    roughness: 0.7
+                    // Cliff edges use bright red, regular walls use gray
+                    baseColor: {
+                        if (model.id && String(model.id).indexOf("cliff_") === 0) {
+                            return "#ff0000"  // Bright red for cliff edges
+                        }
+                        return model.visible ? "#777777" : "#444444"
+                    }
+                    roughness: 0.4  // Slightly shiny for cliff visibility
                     cullMode: Material.NoCulling
-                    emissiveFactor: model.visible ? Qt.vector3d(0.05, 0.05, 0.05) : Qt.vector3d(0, 0, 0)
+                    emissiveFactor: {
+                        if (model.id && String(model.id).indexOf("cliff_") === 0) {
+                            return Qt.vector3d(0.3, 0.0, 0.0)  // Red glow for cliff edges
+                        }
+                        return model.visible ? Qt.vector3d(0.05, 0.05, 0.05) : Qt.vector3d(0, 0, 0)
+                    }
                 }
             }
         }
@@ -596,6 +677,8 @@ View3D {
                     return markerDelegate
                 case "wall":
                     return wallDelegate
+                case "cliff_point":
+                    return cliffPointDelegate
                 default:
                     return null
                 }
@@ -624,14 +707,22 @@ View3D {
                     delegateItem = null
                 }
                 delegateComponent = component
-                if (!component)
+                if (!component) {
+                    console.warn("No component for type:", data.type, "id:", data.id)
                     return
+                }
 
-                delegateItem = component.createObject(sceneFrame, {
+                delegateItem = component.createObject(worldDelegateRoot, {
                     "model": data
                 })
-                if (!delegateItem)
-                    console.warn("Failed to create delegate for type", data.type)
+                if (!delegateItem) {
+                    console.warn("Failed to create delegate for type", data.type, "id:", data.id)
+                }
+                // Debug cliff wall creation (comment out to reduce spam)
+                // else if (data.id && String(data.id).indexOf("cliff_") === 0) {
+                //     console.log("Created cliff wall:", data.id, "at (", data.x, ",", data.y, ",", data.z, ")",
+                //                "size:", data.length_mm, "x", data.thickness_mm, "x", data.height_mm)
+                // }
             }
 
             onModelSnapshotChanged: rebuild()

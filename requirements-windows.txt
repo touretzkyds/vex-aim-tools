@@ -1,7 +1,8 @@
 numpy
 Pillow
 opencv-python
-pyqt6
+PyOpenGL @ git+https://github.com/mcfletch/pyopengl.git@release-3.1.8#egg=PyOpenGL
+PyQt6
 termcolor
 websocket_client
 flask
@@ -10,3 +11,7 @@ pyreadline3
 openai
 gTTS
 google-cloud-texttospeech
+matplotlib
+PyYAML
+torch
+torchvision

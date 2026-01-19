@@ -137,6 +137,22 @@ class WorldMapModel(QAbstractListModel):
             if item is not None:
                 entries.append(item)
 
+        # Add cliff edges from cliff detection results
+        cliff_items = self._build_cliff_edges(robot)
+        entries.extend(cliff_items)
+
+        # Debug: print model update info (only on changes)
+        cliff_sessions = getattr(robot, "cliff_sessions", None)
+        num_sessions = len(cliff_sessions) if cliff_sessions else 0
+        last_num_sessions = getattr(self, "_last_num_sessions", 0)
+        cliff_count = len([e for e in entries if 'cliff_' in e.get('id', '')])
+
+        if cliff_count > 0 and num_sessions != last_num_sessions:
+            self._last_num_sessions = num_sessions
+            print(f"[WorldMapModel] Total entries: {len(entries)}, cliff segments: {cliff_count} ({num_sessions} sessions)")
+            import sys
+            sys.stdout.flush()
+
         self.beginResetModel()
         self._items = entries
         self.endResetModel()
@@ -250,6 +266,163 @@ class WorldMapModel(QAbstractListModel):
             entry["z"] = height / 2.0 if height else entry["z"]
 
         return entry
+
+    def _build_cliff_edges(self, robot: Any) -> list[Item]:
+        """Build wall-like items from cliff detection results stored in robot.
+
+        Now supports multiple detection sessions (accumulated history).
+        Each session is rendered separately with its own segments.
+        """
+        cliff_items: list[Item] = []
+
+        # NEW: Support multiple detection sessions (accumulated)
+        cliff_sessions = getattr(robot, "cliff_sessions", None)
+        if cliff_sessions:
+            # Render all sessions
+            for session_idx, session in enumerate(cliff_sessions):
+                session_id = session.get("id", f"session_{session_idx}")
+                cliff_results = session.get("results", [])
+                session_items = self._build_session_cliff_edges(
+                    cliff_results, session_id, session_idx
+                )
+                cliff_items.extend(session_items)
+            return cliff_items
+
+        # Fallback: single session mode (backward compatibility)
+        cliff_results = getattr(robot, "cliff_results", None)
+        if not cliff_results:
+            return cliff_items
+
+        cliff_items = self._build_session_cliff_edges(cliff_results, "cliff_0", 0)
+        return cliff_items
+
+    def _build_session_cliff_edges(
+        self, cliff_results: list, session_id: str, session_idx: int
+    ) -> list[Item]:
+        """Build cliff edges for a single detection session."""
+        cliff_items: list[Item] = []
+
+        if not cliff_results:
+            return cliff_items
+
+        import numpy as np
+        import math
+
+        # Check if this session was already logged (avoid spam on every refresh)
+        if not hasattr(self, "_logged_sessions"):
+            self._logged_sessions = set()
+        is_new_session = session_id not in self._logged_sessions
+
+        # Find the best frame (highest confidence segment)
+        best_frame = None
+        best_confidence = -1.0
+        for result in cliff_results:
+            if hasattr(result, "segments") and result.segments:
+                for segment in result.segments:
+                    if segment.confidence > best_confidence:
+                        best_confidence = segment.confidence
+                        best_frame = result
+
+        if best_frame is None:
+            return cliff_items
+
+        # Only process the best frame to avoid rendering thousands of objects
+        for seg_idx, segment in enumerate(best_frame.segments):
+            # Skip if no world coordinates
+            if segment.polyline_world is None:
+                continue
+
+            # Convert polyline from meters to millimeters
+            polyline_m = segment.polyline_world
+            polyline_mm = polyline_m * 1000.0  # Convert to mm
+
+            # Debug: print polyline stats ONLY for new sessions (not on every refresh)
+            if is_new_session and seg_idx == 0:
+                total_length = 0.0
+                for i in range(len(polyline_mm) - 1):
+                    dx = polyline_mm[i+1, 0] - polyline_mm[i, 0]
+                    dy = polyline_mm[i+1, 1] - polyline_mm[i, 1]
+                    dz = polyline_mm[i+1, 2] - polyline_mm[i, 2]
+                    total_length += math.sqrt(dx**2 + dy**2 + dz**2)
+                avg_step = total_length / (len(polyline_mm) - 1) if len(polyline_mm) > 1 else 0
+                print(f"  Session {session_idx} (NEW): Polyline {len(polyline_mm)} points, length={total_length:.1f}mm, avg step={avg_step:.2f}mm")
+
+            # Flat red line rendering - thin horizontal segments
+            # Sample every Nth point to create line segments
+            # Aim for ~20-30 segments for smooth line without too many objects
+            sample_step = max(20, len(polyline_mm) // 25)  # At most 25 segments
+            sampled_indices = list(range(0, len(polyline_mm), sample_step))
+            if sampled_indices[-1] != len(polyline_mm) - 1:
+                sampled_indices.append(len(polyline_mm) - 1)  # Always include last point
+
+            # Build flat line segments between sampled points
+            for i in range(len(sampled_indices) - 1):
+                idx1 = sampled_indices[i]
+                idx2 = sampled_indices[i + 1]
+
+                p1 = polyline_mm[idx1]
+                p2 = polyline_mm[idx2]
+
+                # Calculate segment midpoint (x, y, z)
+                # CRITICAL: Convert to Python float, not numpy float!
+                mid_x = float((p1[0] + p2[0]) / 2.0)
+                mid_y = float((p1[1] + p2[1]) / 2.0)
+                mid_z = float((p1[2] + p2[2]) / 2.0)
+
+                # Calculate segment length
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1]
+                dz = p2[2] - p1[2]
+                length_mm = float(math.sqrt(dx**2 + dy**2 + dz**2))
+
+                # Skip degenerate segments
+                if length_mm < 0.1:
+                    continue
+
+                # Calculate rotation angle (theta) in xy plane
+                theta_rad = float(math.atan2(dy, dx))
+
+                # Ultra-flat red line parameters
+                height_mm = 1.5   # 1.5mm height - VERY thin, almost flat
+                thickness_mm = 15.0  # 15mm width - visible but not too thick
+
+                # Cube is centered, lift by height/2 to sit on ground
+                z_position = mid_z + height_mm / 2.0
+
+                # Create a cliff line segment
+                cliff_id = f"{session_id}_seg{seg_idx}_{i}"
+                item: Item = {
+                    "id": cliff_id,
+                    "type": "wall",  # Use wall type (cube-based)
+                    "x": mid_x,
+                    "y": mid_y,
+                    "z": z_position,
+                    "theta": theta_rad,
+                    "visible": True,
+                    "missing": False,
+                    "diameter_mm": None,
+                    "height_mm": height_mm,
+                    "length_mm": length_mm,
+                    "thickness_mm": thickness_mm,
+                    "size_mm": None,
+                    "marker_id": None,
+                    "holding": None,
+                }
+
+                cliff_items.append(item)
+
+        # Debug: print session summary ONLY for new sessions
+        if is_new_session and cliff_items:
+            first = cliff_items[0]
+            print(f"  Session {session_idx} (NEW): Created {len(cliff_items)} flat line segments (best conf: {best_confidence:.2f})")
+            print(f"    First segment: id='{first['id']}', x={first['x']:.1f}mm, y={first['y']:.1f}mm, "
+                  f"size={first['length_mm']:.1f}×{first['thickness_mm']:.1f}×{first['height_mm']:.1f}mm")
+            import sys
+            sys.stdout.flush()
+            # Mark this session as logged
+            self._logged_sessions.add(session_id)
+
+        return cliff_items
 
     @staticmethod
     def _resolve_type(obj: Any) -> Optional[str]:

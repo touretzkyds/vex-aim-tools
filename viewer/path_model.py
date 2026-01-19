@@ -668,7 +668,6 @@ class PathSceneProvider:
 
         accumulate_tree(rrt.treeA or tuple(), self.TREE_A_COLOR, "treeA")
         accumulate_tree(rrt.treeB or tuple(), self.TREE_B_COLOR, "treeB")
-        #print(f'accumulate: rrt.treeA has {len(rrt.treeA)}   rrt.treeB has {len(rrt.treeB)}')
         for index, (tree_nodes, color) in enumerate(self._extra_trees):
             accumulate_tree(tree_nodes, color, f"extra#{index}")
 

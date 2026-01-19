@@ -7,13 +7,19 @@ import math
 from .geometry import wrap_angle
 
 from .rrt_shapes import *
-from .worldmap import BarrelObj, SportsBallObj, AprilTagObj, ArucoMarkerObj, WallObj, DoorwayObj, RoomObj
+from .worldmap import BarrelObj, SportsBallObj, AprilTagObj, ArucoMarkerObj, WallObj, DoorwayObj
 from .aruco import ARUCO_MARKER_SIZE
 
 # *** TODO: Collision checking needs to use opposite headings
 # for treeB nodes because robot is asymmetric.
 
 #---------------- RRTNode ----------------
+
+class GridObstacle:
+    def __init__(self):
+        self.obstacle_id = "occupancy_grid"
+    def __repr__(self):
+        return "<GridObstacle>"
 
 class RRTNode():
     def __init__(self, parent=None, x=0, y=0, q=0, radius=None):
@@ -28,15 +34,15 @@ class RRTNode():
 
     def __repr__(self):
         if self.q is None:
-            return '<RRTNode (%.1f, %.1f)>' % (self.x, self.y)
+            return '<RRTNode (%.1f,%.1f)>' % (self.x, self.y)
         elif not self.parent:
-            return '<RRTNode (%.1f, %.1f)@%d deg>' % \
+            return '<RRTNode (%.1f,%.1f)@%d deg>' % \
                    (self.x, self.y, round(self.q/pi*180))
         elif self.radius is None:
-            return '<RRTNode line to (%.1f, %.1f)@%d deg>' % \
+            return '<RRTNode line to (%.1f,%.1f)@%d deg>' % \
                    (self.x, self.y, round(self.q/pi*180))
         else:
-            return '<RRTNode arc to (%.1f, %.1f)@%d deg, rad=%d>' % \
+            return '<RRTNode arc to (%.1f,%.1f)@%d deg, rad=%d>' % \
                    (self.x, self.y, round(self.q/pi*180), self.radius)
 
 
@@ -58,7 +64,7 @@ class RRT():
     def __init__(self, robot=None, robot_parts=None, bbox=None,
                  max_iter=DEFAULT_MAX_ITER, step_size=10, arc_radius=40,
                  xy_tolsq=90, q_tol=5*pi/180,
-                 obstacles=[], auto_obstacles=False,
+                 obstacles=[], auto_obstacles=True,
                  bounds=(range(-500,500), range(-500,500))):
         self.robot = robot
         self.max_iter = max_iter
@@ -153,10 +159,31 @@ class RRT():
         return parts
 
     def collides(self, node):
-        for part in self.robot_parts_to_node(node):
+        parts = self.robot_parts_to_node(node)
+        for part in parts:
             for obstacle in self.obstacles:
                 if part.collides(obstacle):
                     return obstacle
+        
+        # Check Occupancy Grid
+        if self.robot and hasattr(self.robot, "world_map") and self.robot.world_map.occupancy_grid:
+            grid = self.robot.world_map.occupancy_grid
+            for part in parts:
+                # Use bounding circle for fast check
+                if isinstance(part, Circle):
+                    cx, cy = part.center[0,0], part.center[1,0]
+                    radius = part.radius
+                else:
+                    # Rectangle or Polygon
+                    ((x0,y0),(x1,y1)) = part.get_bounding_box()
+                    cx = (x0+x1)/2
+                    cy = (y0+y1)/2
+                    # Conservative radius (circumcircle)
+                    radius = math.sqrt((x1-x0)**2 + (y1-y0)**2) / 2
+                
+                if grid.check_collision_circle(cx, cy, radius):
+                    return GridObstacle()
+                    
         return False
 
     def all_colliders(self, node):
@@ -179,16 +206,13 @@ class RRT():
             self.generate_obstacles(goal_object, obstacle_inflation, doorway_adjustment)
         self.start = start
         self.goal = goal
+        self.target_heading = goal.q
+        self.compute_bounding_box()
 
         # Check for StartCollides
         collider = self.collides(start)
         if collider:
             raise StartCollides(start,collider,collider.obstacle_id)
-        elif goal is None:
-            return
-
-        self.target_heading = goal.q
-        self.compute_bounding_box()
 
         # Set up treeA with start node
         treeA = [start.copy()]
@@ -306,7 +330,6 @@ class RRT():
         """Smooth a path by picking random subsequences and replacing
         them with a direct link if there is no collision."""
         smoothed_path = self.path
-        print('smoothing path of length', len(smoothed_path))
         for _ in range(0,len(smoothed_path)):
             L = len(smoothed_path)
             if L <= 2: break
@@ -324,13 +347,10 @@ class RRT():
             turn_angle = wrap_angle(new_q - cur_q)
             if abs(turn_angle) <= self.max_turn:
                 result = self.try_linear_smooth(smoothed_path,i,j,cur_x,cur_y,new_q,dist)
-                #print('linear smooth: length', len(result) if result else '--')
             else:
                 result = self.try_arc_smooth(smoothed_path,i,j,cur_x,cur_y,cur_q)
-                #print('arc smooth: length', len(result) if result else '--')
             smoothed_path = result or smoothed_path
         self.path = smoothed_path
-        #print('final smoothed length', len(smoothed_path) if smoothed_path else '--')
 
     def try_linear_smooth(self,smoothed_path,i,j,cur_x,cur_y,new_q,dist):
         step_x = self.step_size * cos(new_q)
@@ -575,49 +595,49 @@ class RRT():
         return obst
 
     @staticmethod
-    def generate_barrel_obstacle(barrel, inflation=0):
+    def generate_barrel_obstacle(barrel, obstacle_inflation):
         s = Circle(center=geometry.point(barrel.pose.x, barrel.pose.y),
-                   radius = barrel.diameter/2 + inflation)
+                   radius = barrel.diameter/2 + obstacle_inflation)
         s.obstacle_id = barrel.id
         return s
 
     @staticmethod
-    def generate_doorway_obstacle(doorway, inflation=0):
+    def generate_doorway_obstacle(doorway, obstacle_inflation):
         DOORWAY_THICKNESS = 5
         s = Rectangle(center=geometry.point(doorway.pose.x, doorway.pose.y),
-                      dimensions=[doorway.door_width+2*inflation, DOORWAY_THICKNESS+2*inflation],
+                      dimensions=[doorway.door_width+2*obstacle_inflation, DOORWAY_THICKNESS+2*obstacle_inflation],
                       orient=doorway.pose.theta)
         s.obstacle_id = doorway.id
         return s
 
     @staticmethod
-    def generate_ball_obstacle(ball, inflation=0):
+    def generate_ball_obstacle(ball, obstacle_inflation):
         s = Circle(center=geometry.point(ball.pose.x, ball.pose.y),
-                   radius = ball.diameter/2 + inflation)
+                   radius = ball.diameter/2 + obstacle_inflation)
         s.obstacle_id = ball.id
         return s
 
     @staticmethod
-    def generate_aruco_obstacle(aruco, inflation=0):
+    def generate_aruco_obstacle(aruco, obstacle_inflation):
         r = Rectangle(center=geometry.point(aruco.pose.x, aruco.pose.y),
-                      dimensions=[5+inflation, ARUCO_MARKER_SIZE+inflation],
+                      dimensions=[5+obstacle_inflation, ARUCO_MARKER_SIZE+obstacle_inflation],
                       orient=aruco.pose.theta)
         r.obstacle_id = aruco.id
         return r
 
     @staticmethod
-    def generate_apriltag_obstacle(apriltag, inflation=0):
+    def generate_apriltag_obstacle(apriltag, obstacle_inflation):
         r = Rectangle(center=geometry.point(apriltag.pose.x, apriltag.pose.y),
-                      dimensions=[apriltag.base_diameter+2*inflation, apriltag.width+2*inflation],
+                      dimensions=[apriltag.base_diameter+2*obstacle_inflation, apriltag.width+2*obstacle_inflation],
                       orient=apriltag.pose.theta)
         r.obstacle_id = apriltag.id
         return r
 
     @staticmethod
-    def generate_marker_obstacle(obj, inflation=0):
+    def generate_marker_obstacle(obj, obstacle_inflation=0):
         sx,sy,sz = obj.size
         r = Rectangle(center=geometry.point(obj.x+sx/2, obj.y),
-                      dimensions=(sx+2*inflation,sy+2*inflation),
+                      dimensions=(sx+2*obstacle_inflation,sy+2*obstacle_inflation),
                       orient=obj.theta)
         r.obstacle_id = obj.id
         return r
@@ -630,9 +650,9 @@ class RRT():
         return r
 
     @staticmethod
-    def generate_chip_obstacle(obj, inflation=0):
-        r = Circle(center = geometry.point(obj.x,obj.y),
-                   radius= obj.radius + inflation)
+    def generate_chip_obstacle(obj, obstacle_inflation=0):
+        r = Circle(center=geometry.point(obj.x,obj.y),
+                   radius=obj.radius+obstacle_inflation)
         r.obstacle_id = obj.id
         return r
 
@@ -645,9 +665,9 @@ class RRT():
         return r
 
     @staticmethod
-    def generate_mapFace_obstacle(obj, inflation=0):
+    def generate_mapFace_obstacle(obj, obstacle_inflation=0):
         r = Rectangle(center=geometry.point(obj.x,obj.y),
-                      dimensions=[obj.size[0]+2*inflation, obj.size[1]+2*inflation])
+                      dimensions=[obj.size[0]+2*obstacle_inflation, obj.size[1]+2*obstacle_inflation])
         r.obstacle_id = obj.id
         return r
 
@@ -667,14 +687,12 @@ class RRT():
         xmax = xmin
         ymax = ymin
         objs =  self.robot.world_map.objects.values()
-        # Rooms and Aruco markers aren't obstacles, so compute them separately.
-        rooms = [self.generate_room_obstacle(obj) for obj in objs if isinstance(obj, RoomObj)]
-        arucos = [self.generate_aruco_obstacle(obj, inflation=0) for obj in objs if isinstance(obj, ArucoMarkerObj)]
-        non_obstacles = rooms + arucos
+        # Rooms and Aruco markers aren't obstacles, so include them separately.
+        others = [] # [obj for obj in objs if isinstance(obj,(RoomObj, ArucoMarkerObj)]
         # Objects may not be obstacles if they are goal locations, so include them again.
         goals = [self.goal_obstacle] if self.goal_obstacle else []
-        for shape in self.obstacles +  non_obstacles + goals:
-            ((x0,y0),(x1,y1)) = shape.get_bounding_box()
+        for obj in self.obstacles +  others + goals:
+            ((x0,y0),(x1,y1)) = obj.get_bounding_box()
             xmin = min(xmin, x0)
             ymin = min(ymin, y0)
             xmax = max(xmax, x1)
