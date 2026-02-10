@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import math
+import os
+import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 
@@ -102,9 +106,20 @@ class ParticleViewer(QObject):
         self._update_interval_ms = max(0, int(update_interval_ms))
         self._redisplay_enabled = self._update_interval_ms > 0
 
+        self._grid_detector = None
+        self._grid_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._grid_future: Optional[concurrent.futures.Future] = None
+        self._grid_requests: deque[tuple[int, np.ndarray, tuple[float, float, float]]] = deque()
+        self._grid_request_counter = 0
+        self._active_grid_request_id: Optional[int] = None
+
         self._timer = QTimer(self)
         self._timer.setInterval(self._update_interval_ms)
         self._timer.timeout.connect(self.refresh)
+
+        self._grid_poll_timer = QTimer(self)
+        self._grid_poll_timer.setInterval(50)
+        self._grid_poll_timer.timeout.connect(self._poll_grid_update_worker)
 
         self._view = QQuickView()
         self._view.setTitle(self._window_name)
@@ -127,6 +142,7 @@ class ParticleViewer(QObject):
 
     def stop(self) -> None:
         self._timer.stop()
+        self._shutdown_grid_update_worker()
         self._view.close()
 
     def refresh(self) -> None:
@@ -188,6 +204,41 @@ class ParticleViewer(QObject):
                 print("[ParticleViewer] Redisplay on.")
             else:
                 print("[ParticleViewer] Redisplay interval is 0; nothing to toggle.")
+
+    @pyqtSlot()
+    def updateOccupancyGridFromCurrentFrame(self) -> None:
+        world_map = getattr(self._robot, "world_map", None)
+        if world_map is None:
+            print("[ParticleViewer] world_map unavailable; cannot update occupancy grid")
+            return
+        if getattr(world_map, "occupancy_grid", None) is None:
+            print("[ParticleViewer] occupancy_grid unavailable; cannot update occupancy grid")
+            return
+
+        image = getattr(self._robot, "camera_image", None)
+        if image is None:
+            print("[ParticleViewer] camera_image unavailable; cannot update occupancy grid")
+            return
+
+        pose = getattr(self._robot, "pose", None)
+        if pose is None:
+            print("[ParticleViewer] robot pose unavailable; cannot update occupancy grid")
+            return
+
+        try:
+            pose_snapshot = (float(pose.x), float(pose.y), float(pose.theta))
+        except Exception:
+            print("[ParticleViewer] robot pose invalid; cannot update occupancy grid")
+            return
+
+        frame = np.array(image, copy=True)
+        self._grid_request_counter += 1
+        request_id = self._grid_request_counter
+        self._grid_requests.append((request_id, frame, pose_snapshot))
+
+        pending = len(self._grid_requests) + (1 if self._grid_future is not None else 0)
+        print(f"[ParticleViewer] queued occupancy grid update #{request_id} (pending={pending})")
+        self._start_next_grid_update()
 
     @pyqtSlot(float)
     def driveForward(self, distance_mm: float) -> None:
@@ -338,6 +389,190 @@ class ParticleViewer(QObject):
 
     # ------------------------------------------------------------------
     # Internal helpers
+
+    def _start_next_grid_update(self) -> None:
+        if self._grid_future is not None or not self._grid_requests:
+            return
+
+        if self._grid_executor is None:
+            self._grid_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+        request_id, frame, pose = self._grid_requests.popleft()
+        self._active_grid_request_id = request_id
+        self._grid_future = self._grid_executor.submit(
+            self._process_grid_update_worker,
+            frame,
+            pose,
+        )
+        if not self._grid_poll_timer.isActive():
+            self._grid_poll_timer.start()
+        print(f"[ParticleViewer] processing occupancy grid update #{request_id}")
+
+    @pyqtSlot()
+    def _poll_grid_update_worker(self) -> None:
+        future = self._grid_future
+        if future is None:
+            if self._grid_requests:
+                self._start_next_grid_update()
+            else:
+                self._grid_poll_timer.stop()
+            return
+
+        if not future.done():
+            return
+
+        request_id = self._active_grid_request_id
+        try:
+            result = future.result(timeout=0.1)
+        except Exception as exc:  # pragma: no cover - defensive
+            result = {
+                "success": False,
+                "status": "error",
+                "error": f"worker_error: {exc}",
+                "ground": 0,
+                "obstacle": 0,
+                "elapsed_s": 0.0,
+            }
+        finally:
+            self._grid_future = None
+            self._active_grid_request_id = None
+
+        status = str(result.get("status", "error"))
+        error_msg = result.get("error")
+        elapsed = float(result.get("elapsed_s", 0.0))
+        ground = int(result.get("ground", 0))
+        obstacle = int(result.get("obstacle", 0))
+
+        if error_msg:
+            print(f"[ParticleViewer] occupancy grid update #{request_id} failed: {error_msg}")
+        elif status == "updated":
+            print(
+                "[ParticleViewer] occupancy grid update #{0}: ground={1} obstacle={2} ({3:.2f}s)".format(
+                    request_id,
+                    ground,
+                    obstacle,
+                    elapsed,
+                )
+            )
+        else:
+            print(f"[ParticleViewer] occupancy grid update #{request_id} skipped ({elapsed:.2f}s)")
+
+        self._start_next_grid_update()
+        if self._grid_future is None and not self._grid_requests:
+            self._grid_poll_timer.stop()
+
+    def _process_grid_update_worker(
+        self,
+        frame: np.ndarray,
+        pose: tuple[float, float, float],
+    ) -> dict[str, Any]:
+        start = time.perf_counter()
+        try:
+            detector = self._grid_detector
+            if detector is None:
+                detector = self._build_grid_detector()
+                self._grid_detector = detector
+
+            result = detector.process(frame)
+            depth_map = result.depth.depth
+            scale_hint = getattr(result.depth, "scale_hint", None)
+            if scale_hint is not None and np.isfinite(scale_hint) and float(scale_hint) > 0.0:
+                depth_map = depth_map * float(scale_hint)
+
+            world_map = getattr(self._robot, "world_map", None)
+            if world_map is None:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": "world_map unavailable",
+                    "ground": 0,
+                    "obstacle": 0,
+                    "elapsed_s": time.perf_counter() - start,
+                }
+
+            success = bool(
+                world_map.update_grid_from_depth(
+                    depth_map,
+                    detector.intrinsics,
+                    detector.extrinsics,
+                    robot_pose=pose,
+                )
+            )
+
+            grid = getattr(world_map, "occupancy_grid", None)
+            stats = getattr(grid, "last_update_counts", {}) if grid is not None else {}
+            return {
+                "success": success,
+                "status": "updated" if success else "skipped",
+                "error": None,
+                "ground": int(stats.get("ground", 0)),
+                "obstacle": int(stats.get("obstacle", 0)),
+                "elapsed_s": time.perf_counter() - start,
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "status": "error",
+                "error": str(exc),
+                "ground": 0,
+                "obstacle": 0,
+                "elapsed_s": time.perf_counter() - start,
+            }
+
+    def _build_grid_detector(self):
+        try:
+            from perception import CliffDetector, DepthAnythingProvider, load_cliff_calibration
+        except Exception as exc:  # pragma: no cover - optional dependency path
+            raise RuntimeError("Perception modules unavailable") from exc
+
+        provider_mode = os.environ.get("DEPTHANYTHING_PROVIDER", "dummy").lower()
+        if provider_mode == "dummy":
+            print("[ParticleViewer] using dummy DepthAnything provider")
+            provider = DepthAnythingProvider.build_dummy()
+        elif provider_mode == "torch":
+            weights_env = os.environ.get("DEPTHANYTHING_WEIGHTS")
+            if not weights_env:
+                raise RuntimeError("DEPTHANYTHING_WEIGHTS must be set for torch provider")
+
+            provider = DepthAnythingProvider.from_torch(
+                weights_path=Path(weights_env),
+                model_type=os.environ.get("DEPTHANYTHING_MODEL", "depthanything-v2-small"),
+                device=os.environ.get("DEPTHANYTHING_DEVICE", "cpu"),
+            )
+        else:
+            raise RuntimeError(f"Unsupported DEPTHANYTHING_PROVIDER={provider_mode}")
+
+        camera = getattr(self._robot, "camera", None)
+        calibration = load_cliff_calibration(camera)
+        return CliffDetector(
+            depth_provider=provider,
+            intrinsics=calibration.intrinsics,
+            gravity_camera=calibration.gravity_camera,
+            extrinsics=calibration.camera_to_base,
+        )
+
+    def _shutdown_grid_update_worker(self) -> None:
+        self._grid_requests.clear()
+        self._active_grid_request_id = None
+        self._grid_poll_timer.stop()
+
+        future = self._grid_future
+        self._grid_future = None
+        if future is not None:
+            try:
+                future.cancel()
+            except Exception:
+                pass
+
+        executor = self._grid_executor
+        self._grid_executor = None
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False)
+            except Exception:
+                pass
+
+        self._grid_detector = None
 
     def _initialise_qml_context(self):
         repo_root = Path(__file__).resolve().parents[1]

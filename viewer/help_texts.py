@@ -29,6 +29,7 @@ PARTICLE_HELP_TEXT = (
     "  W/A/S/D    Drive robot +/- 40 mm or turn +/- 90 degrees\n"
     "  j/k/J/K    Strafe left/right by 10 or 40 mm\n"
     "  e/r        Evaluate particles / resample\n"
+    "  m          Update occupancy grid from current camera frame\n"
     "  z/Z        Reset particles / jitter\n"
     "  c          Clear landmarks (SLAM)\n"
     "  l          Show landmarks\n"
@@ -57,4 +58,20 @@ PATH_HELP_TEXT = (
     "  Esc/Q    Close the viewer\n"
 )
 
-__all__ = ["CAMERA_HELP_TEXT", "WORLD_HELP_TEXT", "PARTICLE_HELP_TEXT", "PATH_HELP_TEXT"]
+DEPTH_HELP_TEXT = (
+    "Depth viewer commands:\n"
+    "  Space    Toggle live refresh on/off\n"
+    "  g        Toggle gradient source (camera/depth)\n"
+    "  r        Refresh one frame (manual)\n"
+    "  Default gradient source: camera image (right/down shift differencing)\n"
+    "  h        Toggle this help overlay\n"
+    "  Esc/Q    Close the viewer\n"
+)
+
+__all__ = [
+    "CAMERA_HELP_TEXT",
+    "WORLD_HELP_TEXT",
+    "PARTICLE_HELP_TEXT",
+    "PATH_HELP_TEXT",
+    "DEPTH_HELP_TEXT",
+]

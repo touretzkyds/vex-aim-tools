@@ -73,6 +73,10 @@ FocusScope {
             if (viewerApp && typeof viewerApp.resampleParticles === "function")
                 viewerApp.resampleParticles()
         }
+        onUpdateOccupancyGridRequested: {
+            if (viewerApp && typeof viewerApp.updateOccupancyGridFromCurrentFrame === "function")
+                viewerApp.updateOccupancyGridFromCurrentFrame()
+        }
         onResetParticles: {
             if (viewerApp && typeof viewerApp.resetParticles === "function")
                 viewerApp.resetParticles()

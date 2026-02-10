@@ -8,6 +8,7 @@ from typing import Any
 __all__ = [
     "CameraImageProvider",
     "CamViewer",
+    "DepthViewer",
     "CliffOverlay",
     "CliffOverlayConfig",
     "LandmarkModel",
@@ -29,6 +30,7 @@ _MODULE_MAP = {
     "CliffOverlay": ("viewer.cliff_overlay", "CliffOverlay"),
     "CliffOverlayConfig": ("viewer.cliff_overlay", "CliffOverlayConfig"),
     "CamViewer": ("viewer.cam_viewer", "CamViewer"),
+    "DepthViewer": ("viewer.depth_viewer", "DepthViewer"),
     "LandmarkModel": ("viewer.particle_model", "LandmarkModel"),
     "ParticleLayerModel": ("viewer.particle_model", "ParticleLayerModel"),
     "ParticleSummary": ("viewer.particle_model", "ParticleSummary"),

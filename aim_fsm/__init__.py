@@ -19,6 +19,7 @@ from .pilot import *
 from .macros import *
 
 from viewer.cam_viewer import CamViewer
+from viewer.depth_viewer import DepthViewer
 from viewer.worldmap_viewer import WorldMapViewer
 from viewer.particle_viewer import ParticleViewer
 from viewer.path_viewer import PathViewer

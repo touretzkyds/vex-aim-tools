@@ -18,6 +18,7 @@ Item {
 
     signal evaluateParticles()
     signal resampleParticles()
+    signal updateOccupancyGridRequested()
     signal resetParticles()
     signal jitterParticles()
     signal clearLandmarks()
@@ -74,6 +75,10 @@ Item {
             break
         case Qt.Key_R:
             resampleParticles()
+            event.accepted = true
+            break
+        case Qt.Key_M:
+            updateOccupancyGridRequested()
             event.accepted = true
             break
         case Qt.Key_Z:

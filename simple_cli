@@ -390,6 +390,8 @@ def show_stuff(args):
         _ensure_viewer('particle_viewer', lambda: ParticleViewer(robot))
     elif spec == "path_viewer":
         _ensure_viewer('path_viewer', lambda: PathViewer(robot))
+    elif spec == "depth_viewer":
+        _ensure_viewer('depth_viewer', lambda: DepthViewer(robot))
     elif spec == "worldmap_viewer":
         _ensure_viewer('worldmap_viewer', lambda: WorldMapViewer(robot))
     elif (spec == "all") or (spec == "all_viewers"):
@@ -401,6 +403,7 @@ def show_stuff(args):
         _ensure_viewer('worldmap_viewer', lambda: WorldMapViewer(robot))
         _ensure_viewer('particle_viewer', lambda: ParticleViewer(robot))
         _ensure_viewer('path_viewer', lambda: PathViewer(robot))
+        _ensure_viewer('depth_viewer', lambda: DepthViewer(robot))
     elif spec == "pose":
         robot.show_pose()
     elif spec == "objects":
@@ -426,6 +429,7 @@ def show_stuff(args):
   show particle_viewer             Open PyQt6 particle viewer
   show worldmap_viewer             Open PyQt6 world map viewer
   show path_viewer                 Open PyQt6 path/wavefront viewer
+  show depth_viewer                Open PyQt6 depth/gradient viewer
    """)
 
 
