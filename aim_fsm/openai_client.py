@@ -14,6 +14,7 @@ default_preamble = """
   Pronounce "AprilTag-1.a" as "April Tag 1-A", and similarly for any word of form "AprilTag-N.x".
   Pronounce "OrangeBarrel.a" as "Orange Barrel A", pronounce "BlueBarrel.b" as "Blue Barrel B", and similarly for other barrel designators.
   Remember to be concise in your answers.
+  Prefer one clear spoken sentence; offer more detail only if the user asks.
 """
 
 class OpenAIClient():
