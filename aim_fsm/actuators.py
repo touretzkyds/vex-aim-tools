@@ -1,6 +1,7 @@
 import asyncio
 import os
 import math
+import time
 from math import pi, sin, cos, atan2
 
 from gtts import gTTS
@@ -9,6 +10,7 @@ from google.cloud import texttospeech
 
 import vex
 from .geometry import wrap_angle
+from .speech_chunking import chunk_speech_text, force_split_chunk
 
 class Actuator():
     class ActuatorLocked(Exception): pass
@@ -276,6 +278,19 @@ class SoundActuator(Actuator):
         self.playing = False
         self.unpause_handle = None
         self.tts_client = None
+        # Multi-chunk say pipeline state (text_to_mp3)
+        self.speech_pipeline_active = False
+        self._speech_cancelled = False
+        self.play_finished = None
+        self._speech_task = None
+        # Generation counters so we only accept active-to-inactive for the
+        # chunk we just started, to avoid waking early or having overlapped plays.
+        self._play_gen = 0
+        self._active_play_gen = 0
+        self._chunk_seen_active_gen = 0
+        self._play_armed_at = 0.0
+        # Ignore finish edges in this window after play_local_file (stale status).
+        self._min_play_s = 0.25
         # ElevenLabs setup: read its key from the environment var.
         # The SDK client is created lazily on first use.
         self.eleven_api_key = os.getenv('ELEVENLABS_API_KEY')
@@ -309,13 +324,61 @@ class SoundActuator(Actuator):
             print('No Google Cloud credentials. Reverting to alternate speech synthesizer.')
             self.use_gcloud = False
 
+    def clear(self):
+        self._cancel_speech_pipeline(cancel_task=True)
+        super().clear()
+
+    def unlock(self, node):
+        abort_pipeline = (self.holder is node and self.speech_pipeline_active)
+        super().unlock(node)
+        if abort_pipeline:
+            # Say node stopped early; wake the pipeline without cancelling
+            # the task from inside a normal complete()->unlock path
+            self._cancel_speech_pipeline(cancel_task=False)
+
+    def unlock_if_held(self, node):
+        abort_pipeline = (self.holder is node and self.speech_pipeline_active)
+        super().unlock_if_held(node)
+        if abort_pipeline:
+            self._cancel_speech_pipeline(cancel_task=False)
+
+    def _cancel_speech_pipeline(self, cancel_task=True):
+        """Stop current multi-chunk speak; not complete."""
+        self._speech_cancelled = True
+        self.speech_pipeline_active = False
+        if cancel_task and self._speech_task is not None and not self._speech_task.done():
+            self._speech_task.cancel()
+        event = self.play_finished
+        if event is not None:
+            try:
+                self.robot.loop.call_soon_threadsafe(event.set)
+            except Exception:
+                try:
+                    event.set()
+                except Exception:
+                    pass
+
     def status_update(self):
         if self.robot.robot0.sound.is_active():
             if not self.playing:
                 self.playing = True
+            if self.speech_pipeline_active and self._active_play_gen:
+                # Record that the current chunk was observed playing successfully
+                self._chunk_seen_active_gen = self._active_play_gen
         else:  # sound is not active
             if self.playing is True:
                 self.playing = False
+                if self.speech_pipeline_active:
+                    # Only wake after this generation was seen active, then idle.
+                    # Ignore finishes that arrive immediately after arming a play.
+                    # This problem caused silent/cut-off speech.
+                    armed_age = time.monotonic() - self._play_armed_at
+                    if (self.play_finished is not None and
+                            self._chunk_seen_active_gen == self._active_play_gen and
+                            self._active_play_gen != 0 and
+                            armed_age >= self._min_play_s):
+                        self.play_finished.set()
+                    return
                 try:  # might fail if speech isn't up yet
                     self.unpause_handle = self.robot.loop.call_later(2, self.robot.speech_listener.unpause)
                 except:
@@ -329,24 +392,216 @@ class SoundActuator(Actuator):
         if self.unpause_handle:
             self.unpause_handle.cancel()
             self.unpause_handle = None
+        self._speech_cancelled = False
         self.robot.loop.call_soon_threadsafe(self.launch_text_to_mp3, text)
 
     def launch_text_to_mp3(self, text):
-        self.robot.loop.create_task(self.text_to_mp3(text))
+        self._speech_task = self.robot.loop.create_task(self.text_to_mp3(text))
+
+    async def _synthesize_async(self, text, speech_file_path):
+        """Run blocking TTS in a thread so playback can overlap with prefetch."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, self.synthesize_to_file, text, speech_file_path
+        )
+
+    def _speech_aborted(self):
+        return self._speech_cancelled or self.holder is None
+
+    async def _wait_until_sound_idle(self, timeout_s=5.0):
+        """Wait until robot sound is inactive. Never hang on a stale playing flag."""
+        remaining = timeout_s
+        while remaining > 0:
+            if self._speech_aborted():
+                return
+            if not self.robot.robot0.sound.is_active():
+                self.playing = False
+                return
+            await asyncio.sleep(0.02)
+            remaining -= 0.02
+        # Timed out: clear local flag and proceed so we never block speech forever.
+        if self.robot.robot0.sound.is_active():
+            print('*** Sound still active before next chunk; proceeding anyway.')
+        self.playing = False
+
+    async def _wait_for_chunk_playback(self, play_gen):
+        """Wait for this chunk to start after arming, then end. 
+        Don't treat the ones not started yet or old active as done.
+        """
+        warned = False
+        elapsed = 0.0
+        # observe THIS generation become active after play_local_file.
+        while not self._speech_aborted():
+            if self._chunk_seen_active_gen == play_gen:
+                break
+            # Ultra-short clip: finish already signaled for this gen.
+            if (self.play_finished.is_set() and
+                    self._chunk_seen_active_gen == play_gen):
+                return True
+            await asyncio.sleep(0.01)
+            elapsed += 0.01
+            if not warned and elapsed >= 10.0:
+                print('*** Still waiting for speech chunk to become active...')
+                warned = True
+            # Fallback: if robot never toggles is_active but enough time passed since arming, 
+            # poll is_active once more and accept a late rising edge.
+            if (elapsed >= self._min_play_s and
+                    self.robot.robot0.sound.is_active() and
+                    self._active_play_gen == play_gen):
+                self._chunk_seen_active_gen = play_gen
+                self.playing = True
+                break
+        else:
+            return False
+
+        if self._speech_aborted():
+            return False
+
+        # Wait for active-to-inactive for this generation.
+        # If status_update ignored an early finish edge inside_min_play_s,
+        # we still complete once the robot is idle after that window.
+        while not self._speech_aborted():
+            if self.play_finished.is_set():
+                return True
+            if (self._chunk_seen_active_gen == play_gen and
+                    not self.robot.robot0.sound.is_active() and
+                    (time.monotonic() - self._play_armed_at) >= self._min_play_s):
+                return True
+            await asyncio.sleep(0.01)
+        return False
 
     async def text_to_mp3(self, text):
-        temp_dir = os.getenv('TEMP', '/tmp')
-        speech_file_path = os.path.join(temp_dir, 'vex_speech.mp3')
-        while True:
-            self.synthesize_to_file(text, speech_file_path)
-            self.robot.speech_listener.pause()
-            try:
-                self.robot.robot0.sound.play_local_file(speech_file_path, self.robot.sound_volume)
-            except vex.aim.InvalidSoundFileException:   # file too long
-                print("*** Speech too long. Truncating...")
-                text = text[0:len(text)//2]
-                continue
+        """Split long text, TTS with two buffers, complete only when all are done."""
+        chunks = chunk_speech_text(text)
+        if not chunks:
+            if not self._speech_aborted():
+                self.complete()
             return
+
+        temp_dir = os.getenv('TEMP', '/tmp')
+        buffers = [
+            os.path.join(temp_dir, 'vex_speech_a.mp3'),
+            os.path.join(temp_dir, 'vex_speech_b.mp3'),
+        ]
+
+        self.speech_pipeline_active = True
+        self.play_finished = asyncio.Event()
+        self._play_gen = 0
+        self._active_play_gen = 0
+        self._chunk_seen_active_gen = 0
+        self.playing = False
+        prefetch_task = None
+
+        try:
+            self.robot.speech_listener.pause()
+            await self._synthesize_async(chunks[0], buffers[0])
+            if self._speech_aborted():
+                return
+
+            i = 0
+            while i < len(chunks):
+                if self._speech_aborted():
+                    return
+
+                buf = buffers[i % 2]
+                next_buf = buffers[(i + 1) % 2]
+
+                # Prefetch next chunk into the other buffer while this one plays
+                prefetch_task = None
+                if i + 1 < len(chunks):
+                    prefetch_task = asyncio.create_task(
+                        self._synthesize_async(chunks[i + 1], next_buf)
+                    )
+
+                # Ensure previous audio is fully idle before starting this chunk
+                await self._wait_until_sound_idle()
+                if self._speech_aborted():
+                    if prefetch_task is not None:
+                        prefetch_task.cancel()
+                        try:
+                            await prefetch_task
+                        except asyncio.CancelledError:
+                            pass
+                    return
+
+                try:
+                    self._play_gen += 1
+                    play_gen = self._play_gen
+                    self.play_finished.clear()
+                    self.playing = False
+                    self._chunk_seen_active_gen = 0
+                    # Arm generation only when issuing play;
+                    # add timestamp so stale inactive edges right after arming are directly ignored.
+                    self._active_play_gen = play_gen
+                    self._play_armed_at = time.monotonic()
+                    self.robot.robot0.sound.play_local_file(
+                        buf, self.robot.sound_volume
+                    )
+                except vex.aim.InvalidSoundFileException:
+                    # Last-resort: split this chunk further and retry; no text loss.
+                    self._active_play_gen = 0
+                    if prefetch_task is not None:
+                        prefetch_task.cancel()
+                        try:
+                            await prefetch_task
+                        except asyncio.CancelledError:
+                            pass
+                        prefetch_task = None
+                    parts = force_split_chunk(chunks[i])
+                    if len(parts) <= 1:
+                        # Cannot split further; drop to a hard half-cut as emergency fallback.
+                        mid = max(1, len(chunks[i]) // 2)
+                        parts = [chunks[i][:mid], chunks[i][mid:]]
+                        parts = [p for p in parts if p]
+                    print(
+                        f'*** Speech chunk too long ({len(chunks[i])} chars). '
+                        f'Splitting into {len(parts)} pieces and retrying...'
+                    )
+                    chunks = chunks[:i] + parts + chunks[i + 1:]
+                    await self._synthesize_async(chunks[i], buf)
+                    if self._speech_aborted():
+                        return
+                    continue
+
+                finished_ok = await self._wait_for_chunk_playback(play_gen)
+                self._active_play_gen = 0
+                if self._speech_aborted() or not finished_ok:
+                    if prefetch_task is not None:
+                        prefetch_task.cancel()
+                        try:
+                            await prefetch_task
+                        except asyncio.CancelledError:
+                            pass
+                    return
+
+                if prefetch_task is not None:
+                    await prefetch_task
+                    prefetch_task = None
+
+                i += 1
+
+            if not self._speech_aborted():
+                try:
+                    self.unpause_handle = self.robot.loop.call_later(
+                        2, self.robot.speech_listener.unpause
+                    )
+                except Exception:
+                    pass
+                # Clear pipeline flag before complete() so unlock-on-complete is not seen as an early abort
+                self.speech_pipeline_active = False
+                self.complete()
+        except asyncio.CancelledError:
+            self._speech_cancelled = True
+            raise
+        finally:
+            self.speech_pipeline_active = False
+            self._active_play_gen = 0
+            if prefetch_task is not None and not prefetch_task.done():
+                prefetch_task.cancel()
+                try:
+                    await prefetch_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     def get_tts_config(self):
         """Return the provider settings (api, voice, params) configured on this SoundActuator."""
