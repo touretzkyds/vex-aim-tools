@@ -467,7 +467,7 @@ class Celeste(StateMachineProgram):
           drop =C=> ParentCompletes()
           }
 
-    class CmdKick(HardKick):  
+    class CmdKick(MediumKick):  
       def start(self,event):
           print(event.data)
           super().start(event)
