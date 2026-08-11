@@ -317,7 +317,7 @@ class SoundActuator(Actuator):
                 audio_config = self.tts_audio_config
             )
         except Exception as e:
-            # print("Google text to speech:", e)
+            print("Google text to speech:", e)
             self.tts_client = None
         # Cloud text-to-speech failed; use gTTs instead
         if self.tts_client is None:

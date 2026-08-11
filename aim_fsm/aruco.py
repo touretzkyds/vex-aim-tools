@@ -62,13 +62,17 @@ class RobotArucoDetector(object):
             [marker_size / 2, marker_size / 2, 0],   # Top right
             [marker_size / 2, -marker_size / 2, 0],  # Bottom right
             [-marker_size / 2, -marker_size / 2, 0]  # Bottom left
-            ], dtype=np.float32)
+            ], dtype=np.float64)
 
     def process_image(self,gray):
         seen_marker_ids = []
         seen_marker_objects = dict()
         last_image_shape = gray.shape[:2]
         corners, ids, _ = self.detector.detectMarkers(gray)
+        # The detector returns np.float32 values, but we need these to
+        # be float64 for JSON serialization to work on any values
+        # derived from these.
+        corners = tuple(np.float64(corner_array) for corner_array in corners)
 
         if ids is None:
             with self._lock:

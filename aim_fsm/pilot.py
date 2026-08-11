@@ -369,7 +369,6 @@ class PilotToObject(PilotBase):
                     center = np.mean(obj.marker.corners, axis=1)
                     pixel_error = self.robot.camera.center[0] - center[0,0]
                 else:
-                    print(f"*** PilotToObject: don't know how to center {obj}")
                     pixel_error = 0
             else:
                 print('*** PilotToObject: target object not currently visible: cannot center it')

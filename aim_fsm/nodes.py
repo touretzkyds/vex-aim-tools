@@ -389,6 +389,23 @@ class SoftKick(ActionNode):
         super().start(event)
         self.robot.actuators['kick'].kick(self, vex.KickType.SOFT)
 
+class MediumKick(ActionNode):
+    def __init__(self):
+        super().__init__()
+
+    def start(self, event=None):
+        super().start(event)
+        self.robot.actuators['kick'].kick(self, vex.KickType.MEDIUM)
+
+
+class HardKick(ActionNode):
+    def __init__(self):
+        super().__init__()
+
+    def start(self, event=None):
+        super().start(event)
+        self.robot.actuators['kick'].kick(self, vex.KickType.HARD)
+
 
 class PlaceKick(ActionNode):
     def __init__(self):
