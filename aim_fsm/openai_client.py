@@ -4,6 +4,7 @@ import cv2
 import base64
 import openai
 
+
 from .events import OpenAIEvent
 
 default_preamble = """
@@ -13,12 +14,12 @@ default_preamble = """
   You converse with humans and answer questions as concisely as possible.
   Pronounce "AprilTag-1.a" as "April Tag 1-A", and similarly for any word of form "AprilTag-N.x".
   Pronounce "OrangeBarrel.a" as "Orange Barrel A", pronounce "BlueBarrel.b" as "Blue Barrel B", and similarly for other barrel designators.
-  Remember to be concise in your answers.
+  Remember to be concise in your answers, but warm and friendly.
   Prefer one clear spoken sentence; offer more detail only if the user asks.
 """
 
 class OpenAIClient():
-    DEFAULT_MODEL = 'gpt-4o'
+    # DEFAULT_MODEL = 'gpt-4o'
     DEFAULT_MODEL = 'gpt-5.5'
     def __init__(self, robot, model=DEFAULT_MODEL, use_moderation=False):
         self.robot = robot
@@ -191,7 +192,6 @@ class OpenAIClient():
 
     def oneshot_query(self, query_text, image=None):
         self.robot.loop.call_soon_threadsafe(self.launch_openai_oneshot_query, query_text, image)
-
 
     def launch_openai_oneshot_query(self, query_text, image=None):
         self.robot.loop.create_task(self.openai_oneshot_query(query_text, image))

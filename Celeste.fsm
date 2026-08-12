@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from aim_fsm import *
 
 CELESTE_VERSION = "1.5"
@@ -17,6 +19,9 @@ new_preamble = """
   A human might pick you up and later put you back down.
   When you are picked up, you cannot move or see, but you can still talk.
   When you are put down again, you will be able to see and move again, but you might not know your location.
+  Remember to be concise in your answers, but warm and friendly.
+  Prefer one clear spoken sentence; offer more detail only if the user asks.
+  When asked to 'load script NAME" or "run script NAME", output the string "#script NAME" without the quotes.
 
   # BODY CONTROL SECTION.
   Here is how to control your body:
@@ -255,6 +260,24 @@ class Celeste(StateMachineProgram):
             else:
                 self.post_data(response_string)
 
+    class CmdScript(StateNode):
+        def start(self,event):
+            super().start(event)
+            print(event.data)
+            filename = event.data.split(' ')[1]
+            if filename[-4:] != '.txt':
+                filename += ".txt"
+            path = Path.home() / "Documents" / "Celeste" / filename
+            try:
+                contents = path.read_text(encoding="utf-8")
+            except (OSError,UnicodeError) as e:
+                print(e)
+                self.post_failure()
+                return
+            self.robot.openai.note_for_later(contents)
+            self.post_completion()
+
+
     class CmdForward(Forward):
       def start(self,event):
           print(event.data)
@@ -289,7 +312,7 @@ class Celeste(StateMachineProgram):
             super().start(None)
 
     class CmdFailed(AskGPT):
-        def __init__(self, query_template, filler_fn):
+        def __init__(self, query_template, filler_fn=lambda : ""):
             super().__init__()
             self.query_template = query_template
             self.filler_fn = filler_fn
@@ -596,6 +619,7 @@ class Celeste(StateMachineProgram):
         check =D(str)=> self.SpeakResponse() =C=> loop
 
         dispatch: Iterate()
+        dispatch =D(re.compile('#script '))=> script
         dispatch =D(re.compile('#say '))=> self.CmdSay() =CNext=> dispatch
         dispatch =D(re.compile('#forward '))=> self.CmdForward() =CNext=> dispatch
         dispatch =D(re.compile('#sideways '))=> self.CmdSideways() =CNext=> dispatch
@@ -616,6 +640,10 @@ class Celeste(StateMachineProgram):
             AskGPT("Please respond to the query using the camera image.") =OpenAITrans()=> check
         dispatch =D()=> Print(prefix='Unrecognized #-command: ') =Next=> dispatch
         dispatch =C=> loop
+
+        script: self.CmdScript()
+        script =C=> Say("Script loaded") =CNext=> dispatch
+        script =F=> self.CmdFailed("I am unable to load that file") =OpenAITrans()=> check
 
         turntoward: self.CmdTurnToward()
         turntoward =CNext=> dispatch
