@@ -620,14 +620,14 @@ loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 # loop.set_debug(True)
 
-def loopthread():
+def loop_runner():
     global loop
     #print(f"loop thead in {threading.current_thread().native_id}")
     loop.run_forever()
 
-th = threading.Thread(target=loopthread)
-th.daemon = True
-th.start()
+loop_thread = threading.Thread(target=loop_runner)
+loop_thread.daemon = True
+loop_thread.start()
 
 if 'ROBOT' in os.environ:
     robot_address = os.environ['ROBOT']
