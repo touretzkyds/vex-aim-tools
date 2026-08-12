@@ -274,7 +274,7 @@ class Celeste(StateMachineProgram):
                 print(e)
                 self.post_failure()
                 return
-            self.robot.openai.note_for_later(contents)
+            self.robot.openai_client.note_for_later(contents)
             self.post_completion()
 
 
@@ -312,7 +312,7 @@ class Celeste(StateMachineProgram):
             super().start(None)
 
     class CmdFailed(AskGPT):
-        def __init__(self, query_template, filler_fn=lambda : ""):
+        def __init__(self, query_template, filler_fn=lambda : ()):
             super().__init__()
             self.query_template = query_template
             self.filler_fn = filler_fn
@@ -620,7 +620,7 @@ class Celeste(StateMachineProgram):
 
         dispatch: Iterate()
         dispatch =D(re.compile('#script '))=> script
-        dispatch =D(re.compile('#say '))=> self.CmdSay() =CNext=> dispatch
+        dispatch =D(re.compile('#say '))=> say
         dispatch =D(re.compile('#forward '))=> self.CmdForward() =CNext=> dispatch
         dispatch =D(re.compile('#sideways '))=> self.CmdSideways() =CNext=> dispatch
         dispatch =D(re.compile('#turn '))=> self.CmdTurn() =CNext=> dispatch
@@ -641,9 +641,13 @@ class Celeste(StateMachineProgram):
         dispatch =D()=> Print(prefix='Unrecognized #-command: ') =Next=> dispatch
         dispatch =C=> loop
 
+        say: self.CmdSay() =CNext=> dispatch
+        say =T(5)=> StateNode() =Next=> dispatch  # safety
+
         script: self.CmdScript()
         script =C=> Say("Script loaded") =CNext=> dispatch
         script =F=> self.CmdFailed("I am unable to load that file") =OpenAITrans()=> check
+        script =T(5)=> StateNode() =Next=> dispatch  # safety
 
         turntoward: self.CmdTurnToward()
         turntoward =CNext=> dispatch
