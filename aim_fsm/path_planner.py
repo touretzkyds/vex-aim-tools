@@ -153,7 +153,6 @@ class PathPlanner():
         distance_to_goal = sqrt((start_node.x - goal_shape.center[0,0])**2 + (start_node.y - goal_shape.center[1,0])**2)
         distance_threshold = (rrt_instance.robot.kine.body_diameter/2) + 15 # fudge factor
         too_close_to_goal = distance_to_goal <= distance_threshold
-        #print(f'{distance_to_goal=} {distance_threshold=}')
         if collider or too_close_to_goal:
           if too_close_to_goal or collider.obstacle_id is goal_shape.obstacle_id:  # We're already at the goal
             print("path_planner: We're already at the goal.")
@@ -197,10 +196,10 @@ class PathPlanner():
             offset = offsets[i]
             if i > 0:
                 wf = WaveFront(rrt_instance.robot, bbox=rrt_instance.bbox)  # need a fresh grid
+            wf.set_goal_shape(goal_shape, offset, obstacle_inflation=0)
             # obstacles come after the goal so they can overwrite goal pixels
             for obstacle in fat_obstacles:
                 wf.add_obstacle(obstacle)
-            wf.set_goal_shape(goal_shape, offset, obstacle_inflation=0)
             wf_start = (start_node.x, start_node.y)
             goal_found = wf.propagate(*wf_start)
             if goal_found: break

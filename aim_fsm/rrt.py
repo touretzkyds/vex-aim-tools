@@ -246,7 +246,6 @@ class RRT():
             raise MaxIterations(self.max_iter)
 
     def compute_world_bounds(self,start,goal):
-        print(f'{start=}  {goal=}')
         xmin = min(start.x, goal.x)
         xmax = max(start.x, goal.x)
         ymin = min(start.y, goal.y)

@@ -530,6 +530,20 @@ def rotation_matrix_to_euler_angles(R):
     return np.array([x, y, z])
 
 
+def polygon_edge_points(poly, spacing=2):
+    "Return a list of points along the edges of a polygon."
+    points = []
+    for edge in poly.edges:
+        pt1 = edge[0]
+        pt2 = edge[1]
+        point_range = pt2 - pt1
+        maxdiv = float(abs(point_range).max())
+        steps = round(maxdiv / spacing)
+        for i in range(steps):
+            pt = pt1 + (i/steps)*point_range
+            points.append([int(pt[0,0]), int(pt[1,0])])
+    return points
+
 def polygon_fill(polygon, offset):
     """
     Implement the scanline polygon fill algorithm
@@ -551,6 +565,7 @@ def polygon_fill(polygon, offset):
     edges = polygon.edges
     ((xmin,ymin), (xmax,ymax)) = polygon.get_bounding_box()
     xmin, ymin, xmax, ymax = floor(xmin), floor(ymin), ceil(xmax), ceil(ymax)
+    print(f'polygon_fill: {xmin=} {ymin=} {xmax=} {ymax=}')
     xdelta = abs(xmin) if xmin < 0 else 0
     xmin += xdelta
     xmax += xdelta

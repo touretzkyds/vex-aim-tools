@@ -6,7 +6,7 @@ import numpy as np
 import heapq
 from math import floor, ceil, cos, sin
 
-from .geometry import wrap_angle, point, rotate_point, aboutZ, polygon_fill, check_concave
+from .geometry import wrap_angle, point, rotate_point, aboutZ, polygon_fill, polygon_edge_points, check_concave
 from .rrt import StartCollides
 from .rrt_shapes import *
 
@@ -117,10 +117,17 @@ class WaveFront():
             #self.set_goal_cell(*rotate_point(point, shape.center[0:2,0], shape.orient))
 
     def generate_rectangular_goal_points(self, shape):
-        EXTRA_GAP = 15
+        EXTRA_GAP = 50
         center_x, center_y = shape.center[0,0], shape.center[1,0]
         empty_points = []
-        goal_points = polygon_fill(Polygon(shape.vertices), 10)
+        offsets = np.array([[-EXTRA_GAP,  EXTRA_GAP, EXTRA_GAP, -EXTRA_GAP],
+                            [-EXTRA_GAP, -EXTRA_GAP, EXTRA_GAP,  EXTRA_GAP],
+                            [        0,          0,          0,          0],
+                            [        0,          0,          0,          0]])
+        offset_vertices = shape.vertices + aboutZ(shape.orient).dot(offsets)
+        # polygon_fill isn't working properly for apriltag rectangles
+        #goal_points = polygon_fill(Polygon(offset_vertices), 10)
+        goal_points = polygon_edge_points(Polygon(offset_vertices))
         return empty_points, goal_points
 
     def generate_round_goal_points(self, shape):

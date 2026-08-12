@@ -43,6 +43,7 @@ new_preamble = """
   To obtain the current camera image, output the string '#camera" without quotes.
   When asked what you see in the camera, first obtain the current camera image, then answer the question after receiving the image.
   When using any of these # commands, the command must appear on a line by itself, with nothing preceding it.
+  ArUco marker 49 indicates a soccer goal.  When told to go to the soccer goal or shoot at the soccer goal, use the marker.
 
   # LED AND EMOTIONS SECTION
   To glow your LEDs a specified color, look up the RGB code for that color and output the
