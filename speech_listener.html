@@ -4,18 +4,113 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Speech Listener for VEX AIM</title>
+    <style>
+      .controls-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 12px;
+      }
+
+      .switch-label {
+          font-weight: bold;
+      }
+
+      .switch {
+          position: relative;
+          display: inline-block;
+          width: 54px;
+          height: 28px;
+          flex: none;
+      }
+
+      .switch input {
+          opacity: 0;
+          width: 0;
+          height: 0;
+      }
+
+      .switch .slider {
+          position: absolute;
+          cursor: pointer;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: red;
+          border-radius: 28px;
+          transition: background-color .2s;
+      }
+
+      .switch .slider:before {
+          position: absolute;
+          content: "";
+          height: 22px;
+          width: 22px;
+          left: 3px;
+          bottom: 3px;
+          background-color: white;
+          border-radius: 50%;
+          transition: transform .2s;
+      }
+
+      .switch input:checked + .slider {
+          background-color: green;
+      }
+
+      .switch input:checked + .slider:before {
+          transform: translateX(26px);
+      }
+
+      .round-button {
+          width: 90px;
+          height: 90px;
+          border-radius: 50%;
+          border: none;
+          font-weight: bold;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          line-height: 1.2;
+          padding: 4px;
+      }
+
+      #textInput {
+          width: 500px;
+          font-size: 16px;
+          padding: 4px 8px;
+          box-sizing: border-box;
+          resize: vertical;
+      }
+    </style>
   </head>
   <body>
     <h1>Speech Listener for VEX AIM</h1>
-    <button id="startStopButton" style="background-color: lime">Start Listening</button><p/>
+    <div class="controls-row">
+      <span class="switch-label">Mic Active</span>
+      <label class="switch">
+        <input type="checkbox" id="modeToggle">
+        <span class="slider"></span>
+      </label>
+      <span class="switch-label">Push to Talk</span>
+      <button id="pttButton" class="round-button" style="background-color: lime">
+        <span>Push</span><span>to</span><span>Talk</span>
+      </button>
+    </div>
+    <textarea id="textInput" placeholder="Type here and press Enter to send..." rows="3"></textarea><p/>
     <div id="result"></div>
 
     <script>
-      const startStopButton = document.getElementById('startStopButton');
+      const modeToggle = document.getElementById('modeToggle');
+      const pttButton = document.getElementById('pttButton');
+      const textInput = document.getElementById('textInput');
       const resultDiv = document.getElementById('result');
-      
+
       let recognition;
       let isRecording = false;
+      let isPTT = false;
       let utterance_count = 0;
 
       // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
@@ -55,6 +150,20 @@
 	  window.location.href = 'http://127.0.0.1:51327/listener_closed.html';
       }
 
+      function sendSpeechText(text) {
+          utterance_count += 1;
+          resultDiv.innerText = `Result ${utterance_count}: ${text}`;
+          console.log('Speech result:', text);
+          fetch('http://127.0.0.1:51327/api/speech-to-text', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: text })
+          })
+          .then(response => response.json())
+          .then(data => { console.log('Backend response:', data); })
+          .catch(error => { console.error('Error:', error); });
+      }
+
       function initializeRecognition() {
 	  if (! ('webkitSpeechRecognition' in window)) {
 	      resultDiv.innerHTML = '<font size=+2 color="red"><b>Speech recognition not supported in this browser!</b></font>';
@@ -72,25 +181,7 @@
 
           recognition.onresult = function (event) {
               const speechResult = event.results[event.resultIndex][0].transcript;
-	      utterance_count += 1;
-              resultDiv.innerText = `Result ${utterance_count}: ${speechResult}`;
-              console.log('Speech result:', speechResult);
-
-              // Send the transcribed text to the Python backend
-              fetch('http://127.0.0.1:51327/api/speech-to-text', {
-                  method: 'POST',
-                  headers: {
-                      'Content-Type': 'application/json'
-                  },
-                  body: JSON.stringify({ text: speechResult })
-              })
-                  .then(response => response.json())
-                  .then(data => {
-                      console.log('Backend response:', data);
-                  })
-                  .catch(error => {
-                      console.error('Error:', error);
-                  });
+              sendSpeechText(speechResult);
           };
 
           recognition.onerror = function (event) {
@@ -102,43 +193,105 @@
 
           recognition.onend = function () {
               console.log('Speech recognition ended');
-              if (isRecording) {
+              if (isRecording || isPTT) {
                   console.log('Restarting speech recognition...');
-                  recognition.start(); // Restart recognition if still recording
+                  recognition.start(); // Restart recognition if still recording or PTT held
               }
           };
       }
 
-      startStopButton.addEventListener('click', () => {
-	  if (! isRecording) {
-              navigator.mediaDevices.getUserMedia({ audio: true })
-		  .then(stream => {
-                      console.log('Microphone access granted');
-                      if (!isRecording) {
-			  initializeRecognition();
-			  recognition.start();
-			  isRecording = true;
-                      }
-		      startStopButton.style.backgroundColor = 'red';
-		      startStopButton.textContent = 'Stop Recording';
+      function updatePTTButton() {
+          if (isRecording) {
+              pttButton.disabled = true;
+              pttButton.style.backgroundColor = 'gray';
+              pttButton.style.color = '#222'; // darker font so label stays visible on gray
+          } else {
+              pttButton.disabled = false;
+              pttButton.style.backgroundColor = isPTT ? 'red' : 'lime';
+              pttButton.style.color = '#000';
+          }
+      }
+
+      function startRecording() {
+          navigator.mediaDevices.getUserMedia({ audio: true })
+              .then(stream => {
+                  console.log('Microphone access granted');
+                  if (!isRecording) {
+                      if (!recognition) initializeRecognition();
+                      recognition.start();
+                      isRecording = true;
+                  }
+                  updatePTTButton();
               })
               .catch(error => {
                   console.error('Microphone access denied', error);
+                  modeToggle.checked = true; // fall back to Push to Talk mode
               });
-	  } else {
-              if (recognition && isRecording) {
-		  recognition.stop();
-		  isRecording = false;
+      }
+
+      function stopRecording() {
+          if (recognition && isRecording) {
+              recognition.stop();
+              isRecording = false;
+          }
+          updatePTTButton();
+      }
+
+      modeToggle.addEventListener('change', () => {
+          if (modeToggle.checked) {
+              // Slid right: Push to Talk mode
+              stopRecording();
+          } else {
+              // Slid left: Record mode
+              startRecording();
+          }
+      });
+
+      pttButton.addEventListener('mousedown', () => {
+          if (isRecording) return;
+          isPTT = true;
+          pttButton.style.backgroundColor = 'red';
+          if (!recognition) {
+              navigator.mediaDevices.getUserMedia({ audio: true })
+                  .then(stream => {
+                      console.log('Microphone access granted');
+                      initializeRecognition();
+                      recognition.start();
+                  })
+                  .catch(error => {
+                      console.error('Microphone access denied', error);
+                      isPTT = false;
+                      pttButton.style.backgroundColor = 'lime';
+                  });
+          } else {
+              try { recognition.start(); } catch (e) {}
+          }
+      });
+
+      document.addEventListener('mouseup', () => {
+          if (isPTT) {
+              isPTT = false;
+              pttButton.style.backgroundColor = 'lime';
+              if (recognition) recognition.stop();
+          }
+      });
+
+      textInput.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+              event.preventDefault(); // don't insert a newline into the textarea
+              const text = textInput.value.trim();
+              if (text) {
+                  sendSpeechText(text);
+                  textInput.value = '';
               }
-	      startStopButton.style.backgroundColor = 'lime';
-	      startStopButton.textContent = 'Start Recording';
-	  }});
+          }
+      });
 
       // Start up the speech listener service
       sendSessionID();
       setInterval(() => { checkSessionID(); }, 2000);
-      startStopButton.click();
-      
+      startRecording(); // default mode (slider left) is Record
+
     </script>
   </body>
 </html>
