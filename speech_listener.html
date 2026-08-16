@@ -293,13 +293,13 @@
           modeToggle.dispatchEvent(new Event('change'));
       });
 
-      pttButton.addEventListener('click', () => {
-          modeToggle.checked = true;
-          modeToggle.dispatchEvent(new Event('change'));
-      });
-
       pttButton.addEventListener('mousedown', () => {
-          if (isRecording) return;
+          if (isRecording) {
+              // Switch from Live Mic mode to PTT mode immediately, then start talking.
+              modeToggle.checked = true;
+              stopRecording();
+              updateLiveMicButton();
+          }
           isPTT = true;
           pttButton.style.backgroundColor = 'red';
           if (!recognition) {
