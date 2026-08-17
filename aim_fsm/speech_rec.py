@@ -5,6 +5,7 @@ import threading
 import os
 import sys
 import logging
+from playsound3 import playsound
 
 try:
     from playsound3 import playsound
@@ -26,7 +27,13 @@ def serve_index():
     parent_dir = os.path.join(this_dir, '..' )
     return send_from_directory(parent_dir, 'speech_listener.html')
 
-@app.route('/closed.html')
+@app.route('/ptt-pointer.png')
+def serve_pointer():
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.join(this_dir, 'media' )
+    return send_from_directory(parent_dir, 'ptt_pointer.png')
+
+@app.route('/listener_closed.html')
 def serve_closed():
     this_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.join(this_dir, '..' )
@@ -43,6 +50,17 @@ def handle_set_session_id():
 def handle_get_session_id():
     global session_id
     return jsonify({'sessionID': session_id})
+
+@app.route('/api/reset-fsm', methods=['POST'])
+def handle_reset_fsm():
+    global running_fsm
+    print('Resetting state machine...')
+    playsound(os.path.abspath('media/reset_fsm.mp3'))
+    for child in running_fsm.children.values():
+        child.stop()
+    running_fsm.children['reset_fsm'].start()
+    return jsonify({'status': 'ok'})
+
 
 @app.route('/api/speech-to-text', methods=['POST'])
 def handle_speech_to_text():
@@ -104,13 +122,13 @@ class SpeechListener():
         words = [self.thesaurus.lookup_word(w) for w in utterance.split(" ")]
         words = self.thesaurus.substitute_phrases(words)
         string = " ".join(words)
-        print("Heard: '%s'" % string)
-        sys.stdout.flush()
         if len(string) == 0:
+            print("Heard: (nothing)")
             return
         if self.confirmation_bell:
-            #playsound(os.path.abspath("media/yaru-bell.mp3"))
             playsound(os.path.abspath("media/acknowledge4.mp3"))
+        print("Heard: '%s'" % string)
+        sys.stdout.flush()
         event = SpeechEvent(string, words)
         self.robot.erouter.post(event)
         

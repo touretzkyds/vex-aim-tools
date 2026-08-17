@@ -4,9 +4,9 @@ from aim_fsm import *
 
 CELESTE_VERSION = "1.5"
 
-emoji_list = ', '.join([key for (key,value) in vars(vex.EmojiType).items()
+emoji_list = ', '.join([key.lower() for (key,value) in vars(vex.EmojiType).items()
                         if isinstance(value, vex.EmojiType)])
-new_preamble = """
+new_preamble = f"""
   # IDENTITY SECTION.
   You are an intelligent mobile robot named Celeste.
   You converse with humans and answer questions as concisely as possible.
@@ -25,6 +25,7 @@ new_preamble = """
 
   # BODY CONTROL SECTION.
   Here is how to control your body:
+  When asked to hang, output the string "#hang" without quotes"
   To move forward by N millimeters, output the string "#forward N" without quotes.
   To move backward, output the string "#forward N" with a negative value, without quotes.
   To move to the left by N milllimeters, output the string "#sideways N" without quotes,
@@ -68,6 +69,7 @@ new_preamble = """
   Whenever you are asked to flash or blink your LEDs, use "#flash" and not "#glow".
   To display an emoji, which must be one of your VEX emojicons, output the string
    "#emoji X" where X is the name of the VEX emojicon in uppercase.
+  The default emojicon is "happy".
   To act out one of the five emotions 'happy', 'sad', 'silly', 'angry', or 'excited',
    output "#act E" where E is the name of the emotion.
   The only emotions you can act out this way are these five: 'happy', 'sad', 'silly',
@@ -260,6 +262,11 @@ class Celeste(StateMachineProgram):
             # else response is a pure string so just speak it in one gulp
             else:
                 self.post_data(response_string)
+
+    class CmdHang(StateNode):
+        def start(selv,event):
+            super().start(event)
+            print("I am now hung.")
 
     class CmdScript(StateNode):
         def start(self,event):
@@ -619,7 +626,11 @@ class Celeste(StateMachineProgram):
         check =D(list)=> dispatch
         check =D(str)=> self.SpeakResponse() =C=> loop
 
+        reset_fsm: Say(["I'm awake", "state machine reset", "Back on the job", "Ready for action",
+                        "I'm listening", "Let's go", "I'm back"]) =C=> loop
+
         dispatch: Iterate()
+        dispatch =D(re.compile('#hang$'))=> self.CmdHang()
         dispatch =D(re.compile('#script '))=> script
         dispatch =D(re.compile('#say '))=> say
         dispatch =D(re.compile('#forward '))=> self.CmdForward() =CNext=> dispatch
