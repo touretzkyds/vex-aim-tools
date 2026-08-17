@@ -263,10 +263,10 @@ class Celeste(StateMachineProgram):
             else:
                 self.post_data(response_string)
 
-    class CmdHang(StateNode):
-        def start(selv,event):
+    class CmdHang(Say):
+        def start(self,event):
+            self.text = "I am hung. Press 'Reset FSM' to recover."
             super().start(event)
-            print("I am now hung.")
 
     class CmdScript(StateNode):
         def start(self,event):
