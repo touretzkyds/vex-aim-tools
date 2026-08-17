@@ -626,7 +626,8 @@ class Celeste(StateMachineProgram):
         check =D(list)=> dispatch
         check =D(str)=> self.SpeakResponse() =C=> loop
 
-        reset_fsm: Say(["I'm awake", "state machine reset", "Back on the job", "Ready for action",
+        reset_fsm: Say(["I'm awake", "state machine reset", "I'm back on the job",
+                        "I'm ready for you", "You have my attention",
                         "I'm listening", "Let's go", "I'm back"]) =C=> loop
 
         dispatch: Iterate()

@@ -7,10 +7,6 @@ import sys
 import logging
 from playsound3 import playsound
 
-try:
-    from playsound3 import playsound
-except: pass
-
 from .thesaurus import Thesaurus
 from .evbase import Event
 from .events import SpeechEvent
@@ -55,10 +51,17 @@ def handle_get_session_id():
 def handle_reset_fsm():
     global running_fsm
     print('Resetting state machine...')
-    playsound(os.path.abspath('media/reset_fsm.mp3'))
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    media_path = os.path.join(this_dir, '..', 'media', 'reset_fsm.mp3')
+    playsound(media_path)
     for child in running_fsm.children.values():
         child.stop()
-    running_fsm.children['reset_fsm'].start()
+    if 'reset_fsm' in running_fsm.children:
+        running_fsm.children['reset_fsm'].start()
+    elif running_fsm.start_node:
+        running_fsm.start_node.start()
+    else:
+        pass
     return jsonify({'status': 'ok'})
 
 
@@ -126,7 +129,9 @@ class SpeechListener():
             print("Heard: (nothing)")
             return
         if self.confirmation_bell:
-            playsound(os.path.abspath("media/acknowledge4.mp3"))
+            this_dir = os.path.dirname(os.path.abspath(__file__))
+            media_path = os.path.join(this_dir, '..', 'media', 'acknowledge4.mp3')
+            playsound(media_path)
         print("Heard: '%s'" % string)
         sys.stdout.flush()
         event = SpeechEvent(string, words)
