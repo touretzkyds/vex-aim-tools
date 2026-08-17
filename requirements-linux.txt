@@ -8,6 +8,7 @@ flask
 flask_cors
 pyreadline3
 openai
+playsound3
 gTTS
 google-cloud-texttospeech
 elevenlabs

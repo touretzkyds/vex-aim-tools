@@ -639,6 +639,7 @@ launch_speech_listener = 'ROBOT_NO_SPEECH' not in os.environ
 
 robot = Robot(loop=loop, host=robot_address,
               launch_speech_listener=launch_speech_listener)
+robot.speech_listener.set_confirmation(True) # play confirmation bell
 evbase.robot_for_loading = robot
 
 ################ Launch

@@ -6,6 +6,10 @@ import os
 import sys
 import logging
 
+try:
+    from playsound3 import playsound
+except: pass
+
 from .thesaurus import Thesaurus
 from .evbase import Event
 from .events import SpeechEvent
@@ -48,13 +52,13 @@ def handle_speech_to_text():
     return jsonify({'status': 'ok'})
 
 class SpeechListener():
-    def __init__(self, _robot, thesaurus=Thesaurus(), debug=False):
-        global robot
+    def __init__(self, _robot, thesaurus=Thesaurus(), debug=False, confirmation_bell=False):
+        global robot, speech_listener
         robot = _robot
-        global speech_listener
         speech_listener = self
 
         self.robot = robot
+        self.confirmation_bell = confirmation_bell
         self.thesaurus = thesaurus
         self.debug = debug
         self.enabled = True
@@ -86,6 +90,9 @@ class SpeechListener():
         self.paused = False
         #print('Speech unpaused')
 
+    def set_confirmation(self, value=True):
+        self.confirmation_bell = value
+
     def handle_utterance(self, utterance):
         if not self.enabled or len(utterance) == 0:
             return
@@ -101,6 +108,9 @@ class SpeechListener():
         sys.stdout.flush()
         if len(string) == 0:
             return
+        if self.confirmation_bell:
+            #playsound(os.path.abspath("media/yaru-bell.mp3"))
+            playsound(os.path.abspath("media/acknowledge4.mp3"))
         event = SpeechEvent(string, words)
         self.robot.erouter.post(event)
         
