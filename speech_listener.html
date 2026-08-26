@@ -12,54 +12,55 @@
           margin-bottom: 12px;
       }
 
-      .switch-label {
-          font-weight: bold;
-      }
-
-      .switch {
+      .switch3 {
           position: relative;
           display: inline-block;
-          width: 54px;
+          width: 80px;
           height: 28px;
           flex: none;
-      }
-
-      .switch input {
-          opacity: 0;
-          width: 0;
-          height: 0;
-      }
-
-      .switch .slider {
-          position: absolute;
-          cursor: pointer;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background-color: red;
           border-radius: 28px;
+          cursor: pointer;
+          background-color: red;
           transition: background-color .2s;
       }
 
-      .switch .slider:before {
+      .switch3[data-mode="edit"] {
+          background-color: #e6c200;
+      }
+
+      .switch3[data-mode="ptt"] {
+          background-color: green;
+      }
+
+      .switch3-knob {
           position: absolute;
-          content: "";
-          height: 22px;
-          width: 22px;
+          top: 3px;
           left: 3px;
-          bottom: 3px;
+          width: 22px;
+          height: 22px;
           background-color: white;
           border-radius: 50%;
           transition: transform .2s;
       }
 
-      .switch input:checked + .slider {
-          background-color: green;
+      .switch3-label {
+          position: absolute;
+          top: 32px;
+          left: 0;
+          width: 100%;
+          text-align: center;
+          font-size: 16px;
+          font-weight: bold;
+          color: #333;
+          pointer-events: none;
       }
 
-      .switch input:checked + .slider:before {
+      .switch3[data-mode="edit"] .switch3-knob {
           transform: translateX(26px);
+      }
+
+      .switch3[data-mode="ptt"] .switch3-knob {
+          transform: translateX(52px);
       }
 
       .round-button {
@@ -119,6 +120,21 @@
           transform: translateY(3px);
       }
 
+      .text-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 12px;
+      }
+
+      .send-button {
+          height: 50px;
+          border-radius: 12px;
+          background-color: #1565c0;
+          color: white;
+          font-weight: bold;
+      }
+
       #textInput {
           width: 500px;
           font-size: 16px;
@@ -142,10 +158,11 @@
           <path d="M32.42,57.49 Q9.58,82 32.42,106.51" stroke-width="3" />
         </svg>
       </button>
-      <label class="switch">
-        <input type="checkbox" id="modeToggle">
-        <span class="slider"></span>
-      </label>
+      <div class="switch3" id="modeSwitch" data-mode="live" tabindex="0" role="slider"
+           aria-label="Input mode: Live Mic, Edit, Push to Talk" aria-valuemin="0" aria-valuemax="2" aria-valuenow="0">
+        <div class="switch3-knob"></div>
+        <div class="switch3-label">Edit</div>
+      </div>
       <button id="pttButton" class="round-button" style="background-color: lime">
         <span>Push</span><span>to</span><span>Talk</span>
       </button>
@@ -154,20 +171,27 @@
         <span>Reset</span><span>FSM</span>
       </button>
     </div>
-    <textarea id="textInput" placeholder="Or type here and press Enter to send..." rows="3"></textarea><p/>
+    <div class="text-row">
+      <textarea id="textInput" placeholder="Or type here and press Enter to send..." rows="3"></textarea>
+      <button id="sendButton" class="round-button send-button" style="display: none">Send</button>
+    </div>
     <div id="result"></div>
 
     <script>
-      const modeToggle = document.getElementById('modeToggle');
+      const modeSwitch = document.getElementById('modeSwitch');
       const liveMicButton = document.getElementById('liveMicButton');
       const pttButton = document.getElementById('pttButton');
       const resetButton = document.getElementById('resetButton');
       const textInput = document.getElementById('textInput');
+      const sendButton = document.getElementById('sendButton');
       const resultDiv = document.getElementById('result');
+
+      const modeOrder = ['live', 'edit', 'ptt'];
 
       let recognition;
       let isRecording = false;
       let isPTT = false;
+      let mode = 'live';
       let utterance_count = 0;
 
       // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
@@ -221,6 +245,20 @@
           .catch(error => { console.error('Error:', error); });
       }
 
+      function depositToTextInput(text) {
+          if (!text) return;
+          const current = textInput.value.trim();
+          textInput.value = current ? current + ' ' + text : text;
+      }
+
+      function sendCurrentText() {
+          const text = textInput.value.trim();
+          if (text) {
+              sendSpeechText(text);
+              textInput.value = '';
+          }
+      }
+
       function initializeRecognition() {
 	  if (! ('webkitSpeechRecognition' in window)) {
 	      resultDiv.innerHTML = '<font size=+2 color="red"><b>Speech recognition not supported in this browser!</b></font>';
@@ -238,7 +276,11 @@
 
           recognition.onresult = function (event) {
               const speechResult = event.results[event.resultIndex][0].transcript;
-              sendSpeechText(speechResult);
+              if (mode === 'edit') {
+                  depositToTextInput(speechResult);
+              } else {
+                  sendSpeechText(speechResult);
+              }
           };
 
           recognition.onerror = function (event) {
@@ -262,9 +304,20 @@
               pttButton.style.backgroundColor = 'gray';
               pttButton.style.color = '#000'; // black font so label stays visible on gray
           } else {
-              pttButton.style.backgroundColor = isPTT ? 'red' : 'lime';
+              const idleColor = mode === 'edit' ? '#e6c200' : 'lime';
+              pttButton.style.backgroundColor = isPTT ? 'red' : idleColor;
               pttButton.style.color = '#000';
           }
+      }
+
+      function updateTextInputPlaceholder() {
+          textInput.placeholder = mode === 'edit'
+              ? 'Press the button to talk, then edit your text here.'
+              : 'Or type here and press Enter to send...';
+      }
+
+      function updateSendButtonVisibility() {
+          sendButton.style.display = mode === 'edit' ? '' : 'none';
       }
 
       function startRecording() {
@@ -280,8 +333,7 @@
               })
               .catch(error => {
                   console.error('Microphone access denied', error);
-                  modeToggle.checked = true; // fall back to Push to Talk mode
-                  updateLiveMicButton();
+                  setMode('ptt'); // fall back to Push to Talk mode
               });
       }
 
@@ -294,23 +346,47 @@
       }
 
       function updateLiveMicButton() {
-          liveMicButton.style.backgroundColor = modeToggle.checked ? 'white' : 'red';
+          liveMicButton.style.backgroundColor = mode === 'live' ? 'red' : 'white';
       }
 
-      modeToggle.addEventListener('change', () => {
-          if (modeToggle.checked) {
-              // Slid right: Push to Talk mode
-              stopRecording();
-          } else {
-              // Slid left: Record mode
+      function setMode(newMode) {
+          if (mode === newMode) return;
+          mode = newMode;
+          modeSwitch.dataset.mode = mode;
+          modeSwitch.setAttribute('aria-valuenow', String(modeOrder.indexOf(mode)));
+          if (mode === 'live') {
+              // Slid left: Live Mic mode
               startRecording();
+          } else {
+              // Slid middle (Edit) or right (Push to Talk): mic only listens while PTT is held
+              stopRecording();
           }
           updateLiveMicButton();
+          updateTextInputPlaceholder();
+          updateSendButtonVisibility();
+      }
+
+      modeSwitch.addEventListener('click', (event) => {
+          const rect = modeSwitch.getBoundingClientRect();
+          const third = rect.width / 3;
+          const relX = event.clientX - rect.left;
+          const newMode = relX < third ? 'live' : (relX < 2 * third ? 'edit' : 'ptt');
+          setMode(newMode);
+      });
+
+      modeSwitch.addEventListener('keydown', (event) => {
+          const idx = modeOrder.indexOf(mode);
+          if (event.key === 'ArrowLeft' && idx > 0) {
+              setMode(modeOrder[idx - 1]);
+              event.preventDefault();
+          } else if (event.key === 'ArrowRight' && idx < modeOrder.length - 1) {
+              setMode(modeOrder[idx + 1]);
+              event.preventDefault();
+          }
       });
 
       liveMicButton.addEventListener('click', () => {
-          modeToggle.checked = false;
-          modeToggle.dispatchEvent(new Event('change'));
+          setMode('live');
       });
 
       resetButton.addEventListener('mousedown', () => {
@@ -325,11 +401,9 @@
       });
 
       pttButton.addEventListener('mousedown', () => {
-          if (isRecording) {
+          if (mode === 'live') {
               // Switch from Live Mic mode to PTT mode immediately, then start talking.
-              modeToggle.checked = true;
-              stopRecording();
-              updateLiveMicButton();
+              setMode('ptt');
           }
           isPTT = true;
           pttButton.style.backgroundColor = 'red';
@@ -343,7 +417,7 @@
                   .catch(error => {
                       console.error('Microphone access denied', error);
                       isPTT = false;
-                      pttButton.style.backgroundColor = 'lime';
+                      updatePTTButton();
                   });
           } else {
               try { recognition.start(); } catch (e) {}
@@ -353,19 +427,19 @@
       document.addEventListener('mouseup', () => {
           if (isPTT) {
               isPTT = false;
-              pttButton.style.backgroundColor = 'lime';
+              updatePTTButton();
               if (recognition) recognition.stop();
           }
       });
 
+      sendButton.addEventListener('click', () => {
+          sendCurrentText();
+      });
+
       textInput.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter') {
+          if (event.key === 'Enter' && mode !== 'edit') {
               event.preventDefault(); // don't insert a newline into the textarea
-              const text = textInput.value.trim();
-              if (text) {
-                  sendSpeechText(text);
-                  textInput.value = '';
-              }
+              sendCurrentText();
           }
       });
 
@@ -374,6 +448,8 @@
       setInterval(() => { checkSessionID(); }, 2000);
       startRecording(); // default mode (slider left) is Record
       updateLiveMicButton();
+      updateTextInputPlaceholder();
+      updateSendButtonVisibility();
 
     </script>
   </body>
