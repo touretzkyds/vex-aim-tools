@@ -1,7 +1,8 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 import webbrowser
 import threading
+import queue
 import os
 import sys
 import logging
@@ -16,6 +17,36 @@ app = Flask('VEX AIM Speech Listener')
 CORS(app)  # This will enable CORS for all routes
 
 session_id = None
+
+# Console messages are pushed to any listening browser tabs over SSE.
+message_subscribers = []
+message_subscribers_lock = threading.Lock()
+
+def add_to_transcript(text):
+    with message_subscribers_lock:
+        subscribers = list(message_subscribers)
+    for q in subscribers:
+        q.put(text)
+
+@app.route('/api/console-stream')
+def console_stream():
+    def gen():
+        q = queue.Queue()
+        with message_subscribers_lock:
+            message_subscribers.append(q)
+        try:
+            while True:
+                text = q.get()
+                # Blank lines/newlines within a message would break the SSE
+                # framing, so send each line as its own "data:" field.
+                for line in text.splitlines() or ['']:
+                    yield f'data: {line}\n'
+                yield '\n'
+        finally:
+            with message_subscribers_lock:
+                if q in message_subscribers:
+                    message_subscribers.remove(q)
+    return Response(gen(), mimetype='text/event-stream')
 
 @app.route('/')
 def serve_index():
@@ -51,6 +82,7 @@ def handle_get_session_id():
 def handle_reset_fsm():
     global running_fsm
     print('Resetting state machine...')
+    add_to_transcript('Resetting state machine...')
     this_dir = os.path.dirname(os.path.abspath(__file__))
     media_path = os.path.join(this_dir, '..', 'media', 'reset_fsm.mp3')
     playsound(media_path)
@@ -90,7 +122,7 @@ class SpeechListener():
         log = logging.getLogger('werkzeug')
         log.setLevel(logging.ERROR)
         # Debug must be false to prevent duplicate tab:
-        app.run(port=51327, debug=False, use_reloader=False)
+        app.run(port=51327, debug=False, use_reloader=False, threaded=True)
 
     def load_listener_page(self):
         webbrowser.open_new_tab('http://127.0.0.1:51327/')
@@ -127,6 +159,7 @@ class SpeechListener():
         string = " ".join(words)
         if len(string) == 0:
             print("Heard: (nothing)")
+            add_to_transcript("Heard: (nothing)")
             return
         if self.confirmation_bell:
             this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -134,6 +167,7 @@ class SpeechListener():
             playsound(media_path)
         print("Heard: '%s'" % string)
         sys.stdout.flush()
+        add_to_transcript("Heard: '%s'" % string)
         event = SpeechEvent(string, words)
         self.robot.erouter.post(event)
         

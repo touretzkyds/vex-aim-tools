@@ -207,7 +207,8 @@ class Celeste(StateMachineProgram):
     SEARCH_FAIL_MSG = "I turned all the way around but could not find %s."
 
     def __init__(self):
-        super().__init__(launch_cam_viewer=True,
+        super().__init__(character_name="Celeste",
+                         launch_cam_viewer=True,
                          launch_worldmap_viewer=True,
                          launch_particle_viewer=True,
                          launch_path_viewer=True)
@@ -615,7 +616,7 @@ class Celeste(StateMachineProgram):
         
     $setup{
         Print(f"Celeste version {CELESTE_VERSION}") =N=>
-          TagDetection(True) =N=>
+          TagDetection(True) =T(2)=>
             Say("Talk to me") =C=> loop
 
         putdown: Say(["I'm good", "Okay then", "I'm back", "Now then"]) =C=> loop

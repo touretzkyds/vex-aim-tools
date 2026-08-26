@@ -39,6 +39,7 @@ running_fsm = None
 
 class StateMachineProgram(StateNode):
     def __init__(self,
+                 character_name = "Robot",
                  launch_cam_viewer = True,
                  launch_worldmap_viewer = True,
                  force_annotation = False,   # set to True for annotation even without cam_viewer
@@ -65,6 +66,7 @@ class StateMachineProgram(StateNode):
                  rrt = None,
                  ):
         super().__init__()
+        self.robot.character_name = character_name
         self.name = self.__class__.__name__.lower()
         self.parent = None
         self.robot.robot0.set_xy_position(0,0)

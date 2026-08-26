@@ -11,6 +11,7 @@ from google.cloud import texttospeech
 import vex
 from .geometry import wrap_angle
 from .speech_chunking import chunk_speech_text, force_split_chunk
+from .speech_rec import add_to_transcript
 
 class Actuator():
     class ActuatorLocked(Exception): pass
@@ -393,6 +394,7 @@ class SoundActuator(Actuator):
             self.unpause_handle.cancel()
             self.unpause_handle = None
         self._speech_cancelled = False
+        add_to_transcript(self.robot.character_name + ": " + text)
         self.robot.loop.call_soon_threadsafe(self.launch_text_to_mp3, text)
 
     def launch_text_to_mp3(self, text):

@@ -142,6 +142,55 @@
           box-sizing: border-box;
           resize: vertical;
       }
+
+      .transcript-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 4px;
+      }
+
+      .transcript-label {
+          font-weight: bold;
+      }
+
+      .copy-button {
+          border: none;
+          background: none;
+          cursor: pointer;
+          padding: 2px;
+          display: inline-flex;
+          color: #333;
+      }
+
+      .copy-button svg {
+          width: 18px;
+          height: 18px;
+      }
+
+      .copy-button:hover {
+          color: #000;
+      }
+
+      #consoleLog {
+          width: 500px;
+          height: 300px;
+          overflow-y: auto;
+          border: 2px solid #888;
+          border-radius: 4px;
+          background-color: #f7f7f7;
+          font-family: monospace;
+          font-size: 13px;
+          padding: 6px 8px;
+          box-sizing: border-box;
+          white-space: pre-wrap;
+          margin-bottom: 12px;
+      }
+
+      #consoleLogPlaceholder {
+          color: #888;
+          font-style: italic;
+      }
     </style>
   </head>
   <body>
@@ -175,6 +224,16 @@
       <textarea id="textInput" placeholder="Or type here and press Enter to send..." rows="3"></textarea>
       <button id="sendButton" class="round-button send-button" style="display: none">Send</button>
     </div>
+    <div class="transcript-header">
+      <div class="transcript-label">Transcript:</div>
+      <button id="copyTranscriptButton" class="copy-button" title="Copy transcript" aria-label="Copy transcript">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </button>
+    </div>
+    <div id="consoleLog"><div id="consoleLogPlaceholder">The conversation transcript will appear here.</div></div>
     <div id="result"></div>
 
     <script>
@@ -184,6 +243,8 @@
       const resetButton = document.getElementById('resetButton');
       const textInput = document.getElementById('textInput');
       const sendButton = document.getElementById('sendButton');
+      const consoleLog = document.getElementById('consoleLog');
+      const copyTranscriptButton = document.getElementById('copyTranscriptButton');
       const resultDiv = document.getElementById('result');
 
       const modeOrder = ['live', 'edit', 'ptt'];
@@ -192,7 +253,6 @@
       let isRecording = false;
       let isPTT = false;
       let mode = 'live';
-      let utterance_count = 0;
 
       // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
       function getTime () {
@@ -232,8 +292,6 @@
       }
 
       function sendSpeechText(text) {
-          utterance_count += 1;
-          resultDiv.innerText = `Result ${utterance_count}: ${text}`;
           console.log('Speech result:', text);
           fetch('http://127.0.0.1:51327/api/speech-to-text', {
               method: 'POST',
@@ -243,6 +301,30 @@
           .then(response => response.json())
           .then(data => { console.log('Backend response:', data); })
           .catch(error => { console.error('Error:', error); });
+      }
+
+      function appendConsoleMessage(text) {
+          const placeholder = document.getElementById('consoleLogPlaceholder');
+          if (placeholder) placeholder.remove();
+          const atBottom = consoleLog.scrollHeight - consoleLog.scrollTop <= consoleLog.clientHeight + 4;
+          const line = document.createElement('div');
+          line.textContent = text;
+          consoleLog.appendChild(line);
+          if (atBottom) consoleLog.scrollTop = consoleLog.scrollHeight;
+      }
+
+      copyTranscriptButton.addEventListener('click', () => {
+          const text = Array.from(consoleLog.children)
+              .filter(el => el.id !== 'consoleLogPlaceholder')
+              .map(el => el.textContent)
+              .join('\n');
+          navigator.clipboard.writeText(text).catch(error => console.error('Copy failed:', error));
+      });
+
+      function connectConsoleStream() {
+          const eventSource = new EventSource('http://127.0.0.1:51327/api/console-stream');
+          eventSource.onmessage = (event) => { appendConsoleMessage(event.data); };
+          eventSource.onerror = (event) => { console.error('Console stream error:', event); };
       }
 
       function depositToTextInput(text) {
@@ -446,6 +528,7 @@
       // Start up the speech listener service
       sendSessionID();
       setInterval(() => { checkSessionID(); }, 2000);
+      connectConsoleStream();
       startRecording(); // default mode (slider left) is Record
       updateLiveMicButton();
       updateTextInputPlaceholder();
