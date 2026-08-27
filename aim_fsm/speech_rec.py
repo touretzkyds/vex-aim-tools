@@ -54,10 +54,11 @@ def serve_index():
     parent_dir = os.path.join(this_dir, '..' )
     return send_from_directory(parent_dir, 'speech_listener.html')
 
-@app.route('/ptt-pointer.png')
+@app.route('/ptt_pointer.png')
 def serve_pointer():
     this_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.join(this_dir, 'media' )
+    parent_dir = os.path.join(this_dir, '..', 'media' )
+    print(f'{parent_dir=}')
     return send_from_directory(parent_dir, 'ptt_pointer.png')
 
 @app.route('/listener_closed.html')
