@@ -58,7 +58,6 @@ def serve_index():
 def serve_pointer():
     this_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.join(this_dir, '..', 'media' )
-    print(f'{parent_dir=}')
     return send_from_directory(parent_dir, 'ptt_pointer.png')
 
 @app.route('/listener_closed.html')
