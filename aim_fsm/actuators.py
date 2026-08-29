@@ -2,6 +2,7 @@ import asyncio
 import os
 import math
 import time
+import re
 from math import pi, sin, cos, atan2
 
 from gtts import gTTS
@@ -395,7 +396,13 @@ class SoundActuator(Actuator):
             self.unpause_handle = None
         self._speech_cancelled = False
         add_to_transcript(self.robot.character_name + ": " + text)
-        self.robot.loop.call_soon_threadsafe(self.launch_text_to_mp3, text)
+        hacked_text = self.apply_pronunciation_hacks(text)
+        self.robot.loop.call_soon_threadsafe(self.launch_text_to_mp3, hacked_text)
+
+    def apply_pronunciation_hacks(self, text):
+        "TODO: this function should use a list of substitutions that is user-extensible."
+        hacked_text = re.sub(r'\bVEX\s+AIM\b', 'veks aim', text)
+        return hacked_text
 
     def launch_text_to_mp3(self, text):
         self._speech_task = self.robot.loop.create_task(self.text_to_mp3(text))
