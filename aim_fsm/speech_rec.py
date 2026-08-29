@@ -85,7 +85,7 @@ def handle_reset_fsm():
     print('Resetting state machine...')
     add_to_transcript('Resetting state machine...')
     this_dir = os.path.dirname(os.path.abspath(__file__))
-    media_path = os.path.join(this_dir, '..', 'media', 'reset_fsm.mp3')
+    media_path = os.path.join(this_dir, '..', 'media', 'reset_fsm.wav')
     playsound(media_path)
     for child in running_fsm.children.values():
         child.stop()
@@ -164,7 +164,7 @@ class SpeechListener():
             return
         if self.confirmation_bell:
             this_dir = os.path.dirname(os.path.abspath(__file__))
-            media_path = os.path.join(this_dir, '..', 'media', 'acknowledge4.mp3')
+            media_path = os.path.join(this_dir, '..', 'media', 'acknowledge4.wav')
             playsound(media_path)
         print("Heard: '%s'" % string)
         sys.stdout.flush()
