@@ -207,8 +207,8 @@
           <path d="M32.42,57.49 Q9.58,82 32.42,106.51" stroke-width="3" />
         </svg>
       </button>
-      <div class="switch3" id="modeSwitch" data-mode="live" tabindex="0" role="slider"
-           aria-label="Input mode: Live Mic, Edit, Push to Talk" aria-valuemin="0" aria-valuemax="2" aria-valuenow="0">
+      <div class="switch3" id="modeSwitch" data-mode="ptt" tabindex="0" role="slider"
+           aria-label="Input mode: Live Mic, Edit, Push to Talk" aria-valuemin="0" aria-valuemax="2" aria-valuenow="2">
         <div class="switch3-knob"></div>
         <div class="switch3-label">Edit</div>
       </div>
@@ -252,7 +252,7 @@
       let recognition;
       let isRecording = false;
       let isPTT = false;
-      let mode = 'live';
+      let mode = 'ptt';
 
       // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
       function getTime () {
@@ -529,7 +529,11 @@
       sendSessionID();
       setInterval(() => { checkSessionID(); }, 2000);
       connectConsoleStream();
-      startRecording(); // default mode (slider left) is Record
+      if (mode === 'live') {
+          startRecording(); // only Live Mic mode auto-starts the mic
+      } else {
+          updatePTTButton();
+      }
       updateLiveMicButton();
       updateTextInputPlaceholder();
       updateSendButtonVisibility();
