@@ -96,6 +96,15 @@
           flex: none;
       }
 
+      @keyframes live-mic-pulse {
+          0%, 100% { transform: scale(1); opacity: 0.75; }
+          50% { transform: scale(1.04); opacity: 1; }
+      }
+
+      .live-mic-button.pulsing {
+          animation: live-mic-pulse 1.2s ease-in-out infinite;
+      }
+
       .ptt-pointer {
           width: 48px;
           height: auto;
@@ -429,6 +438,7 @@
 
       function updateLiveMicButton() {
           liveMicButton.style.backgroundColor = mode === 'live' ? 'red' : 'white';
+          liveMicButton.classList.toggle('pulsing', mode === 'live');
       }
 
       function setMode(newMode) {
