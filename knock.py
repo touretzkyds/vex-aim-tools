@@ -32,9 +32,10 @@ FOCAL_LENGTH = 396.3
 APPROACH_STANDOFF_MM = 50.0  
 KNOCK_TURN_DEG = 45.0         
 KNOCK_NUDGE_MM = 20.0        
-KNOCK_RETREAT_MM = 75.0      
+KNOCK_RETREAT_MM = 40.0      
 MAX_KNOCK_ATTEMPTS = 3        
 RESCAN_DELAY_SEC = 0.05      
+SETTLE_BEFORE_CHECK_SEC = 3.0
 
 
 class knock(StateMachineProgram):
@@ -170,8 +171,25 @@ class knock(StateMachineProgram):
 
         return updated_ids
 
+    def _find_nearest_domino(self, x, y, max_dist_mm=80.0):
+        """Match a domino by *position* rather than face_label/obj_id, since
+        a domino's visible face (and therefore its face_label/obj_id) changes
+        the moment it falls over. Without this, a freshly-fallen domino gets
+        registered under a brand-new id and the old target_id is never found
+        again -> CheckKnockResult always sees it as 'missing' and the robot
+        keeps knocking at an already-fallen domino."""
+        world_map = getattr(self.robot, "world_map", None)
+        if world_map is None:
+            return None, None
+        best_id, best_obj, best_dist = None, None, max_dist_mm
+        for oid, obj in world_map.objects.items():
+            d = math.hypot(obj.pose.x - x, obj.pose.y - y)
+            if d <= best_dist:
+                best_id, best_obj, best_dist = oid, obj, d
+        return best_id, best_obj
+
     # ------------------------------------------------------------------
-    # FSM nodes & Parent Node (KnockDomino)
+    # FSM nodes
     # ------------------------------------------------------------------
     class FindStandingDomino(StateNode):
         def start(self, event=None):
@@ -218,49 +236,36 @@ class knock(StateMachineProgram):
                 print(f"[KNOCK] Approaching to {self.target_pose} ({APPROACH_STANDOFF_MM:.0f} mm standoff)")
             super().start(event)
 
-    class KnockDomino(StateNode):
-        """Parent node containing the complete swipe sequence"""
-        class TurnKnock35(ActionNode):
-            def start(self, event=None):
-                super().start(event)
-                print(f"[KNOCK] Turning {-KNOCK_TURN_DEG:.0f} deg...")
-                self.robot.actuators["drive"].turn(self, math.radians(-KNOCK_TURN_DEG), None)
+    class TurnKnock45(ActionNode):
+        def start(self, event=None):
+            super().start(event)
+            print(f"[KNOCK] Turning {-KNOCK_TURN_DEG:.0f} deg...")
+            self.robot.actuators["drive"].turn(self, math.radians(-KNOCK_TURN_DEG), None)
 
-        class NudgeRightFast(ActionNode):
-            def start(self, event=None):
-                super().start(event)
-                print(f"[KNOCK] Nudging {KNOCK_NUDGE_MM:.0f} mm right...")
-                self.robot.actuators["drive"].sideways(self, KNOCK_NUDGE_MM, None)
+    class NudgeRightFast(ActionNode):
+        def start(self, event=None):
+            super().start(event)
+            print(f"[KNOCK] Nudging {KNOCK_NUDGE_MM:.0f} mm right...")
+            self.robot.actuators["drive"].sideways(self, KNOCK_NUDGE_MM, None)
 
-        class NudgeLeftFast(ActionNode):
-            def start(self, event=None):
-                super().start(event)
-                print(f"[KNOCK] Nudging {-KNOCK_NUDGE_MM:.0f} mm left...")
-                self.robot.actuators["drive"].sideways(self, -KNOCK_NUDGE_MM, None)
+    class NudgeLeftFast(ActionNode):
+        def start(self, event=None):
+            super().start(event)
+            print(f"[KNOCK] Nudging {-KNOCK_NUDGE_MM:.0f} mm left...")
+            self.robot.actuators["drive"].sideways(self, -KNOCK_NUDGE_MM, None)
 
-        class TurnBackFromKnock(ActionNode):
-            def start(self, event=None):
-                super().start(event)
-                print(f"[KNOCK] Turning back {KNOCK_TURN_DEG:.0f} deg...")
-                self.robot.actuators["drive"].turn(self, math.radians(KNOCK_TURN_DEG), None)
-
-        def setup(self):
-            t35 = self.TurnKnock35().set_name("t35").set_parent(self)
-            n_right = self.NudgeRightFast().set_name("n_right").set_parent(self)
-            n_left = self.NudgeLeftFast().set_name("n_left").set_parent(self)
-            t_back = self.TurnBackFromKnock().set_name("t_back").set_parent(self)
-
-            CompletionTrans().add_sources(t35).add_destinations(n_right)
-            CompletionTrans().add_sources(n_right).add_destinations(n_left)
-            CompletionTrans().add_sources(n_left).add_destinations(t_back)
-            
-            return self
+    class TurnBackFromKnock(ActionNode):
+        def start(self, event=None):
+            super().start(event)
+            print(f"[KNOCK] Turning back {KNOCK_TURN_DEG:.0f} deg...")
+            self.robot.actuators["drive"].turn(self, math.radians(KNOCK_TURN_DEG), None)
 
     class RetreatFromDomino(ActionNode):
         def start(self, event=None):
             super().start(event)
             print(f"[KNOCK] Backing away {KNOCK_RETREAT_MM:.0f} mm to check the result...")
             
+            # Clear target from world map immediately after retreating
             world_map = getattr(self.robot, "world_map", None)
             if world_map is not None and self.parent.target_id in world_map.objects:
                 with world_map._lock if hasattr(world_map, "_lock") else nullcontext():
@@ -271,23 +276,38 @@ class knock(StateMachineProgram):
 
             self.robot.actuators["drive"].forward(self, -KNOCK_RETREAT_MM, None)
 
+    class SettleAfterRetreat(StateNode):
+        """Give the camera a moment to catch a sharp, motion-free frame
+        after the retreat before we trust its fallen/standing classification.
+        Checking immediately off the retreat can grab a stale/blurred frame
+        that still reads as 'standing' even if the domino already fell."""
+        def start(self, event=None):
+            super().start(event)
+            print(f"[KNOCK] Settling {SETTLE_BEFORE_CHECK_SEC:.1f}s before checking result...")
+
     class CheckKnockResult(StateNode):
         def start(self, event=None):
             super().start(event)
             detector = getattr(self.robot, "domino_detector", None)
-            if detector is None or self.parent._last_image is None or self.parent.target_id is None:
+            if detector is None or self.parent._last_image is None or self.parent.target is None:
                 self.post_failure()
                 return
 
+            # Remember where the target was *before* we look it up again,
+            # since its id/label may change once it falls over.
+            last_x, last_y = self.parent.target.pose.x, self.parent.target.pose.y
+
+            # Re-detect and update world map ONLY here after retreating
             observations = detector.detect(self.parent._last_image, frame_id=getattr(self.robot, "frame_count", None))
             if observations:
                 self.parent._register_observations(observations)
-            
-            print(f"[KNOCK] World map updated post-retreat for target evaluation {self.parent.target_id}.")
 
-            updated = self.robot.world_map.objects.get(self.parent.target_id)
-            if updated is not None and updated.is_fallen:
-                self.parent.target = updated
+            print(f"[KNOCK] World map updated post-retreat for target evaluation near ({last_x:.1f}, {last_y:.1f}).")
+
+            nearest_id, nearest_obj = self.parent._find_nearest_domino(last_x, last_y)
+            if nearest_obj is not None and nearest_obj.is_fallen:
+                self.parent.target = nearest_obj
+                self.parent.target_id = nearest_id  # may differ from the pre-knock id
                 self.post_success()
             else:
                 self.post_failure()
@@ -346,8 +366,12 @@ class knock(StateMachineProgram):
         approach = self.ApproachDomino().set_name("approach").set_parent(self)
         approach_pilot_event = Print("[KNOCK] Pilot event during approach; rescanning...").set_name("approach_pilot_event").set_parent(self)
 
-        knock_action = self.KnockDomino().set_name("knock_action").set_parent(self)
+        turn45 = self.TurnKnock45().set_name("turn45").set_parent(self)
+        nudge_right = self.NudgeRightFast().set_name("nudge_right").set_parent(self)
+        nudge_left = self.NudgeLeftFast().set_name("nudge_left").set_parent(self)
+        turn_back = self.TurnBackFromKnock().set_name("turn_back").set_parent(self)
         retreat = self.RetreatFromDomino().set_name("retreat").set_parent(self)
+        settle = self.SettleAfterRetreat().set_name("settle").set_parent(self)
         motion_failed = Print("[KNOCK] Motion action failed; rescanning...").set_name("motion_failed").set_parent(self)
 
         check_status = self.CheckKnockResult().set_name("check_status").set_parent(self)
@@ -361,16 +385,27 @@ class knock(StateMachineProgram):
         TimerTrans(RESCAN_DELAY_SEC).add_sources(wait_scan).add_destinations(find)
 
         # --- approach via the pilot ---
-        CompletionTrans().add_sources(approach).add_destinations(knock_action)
+        CompletionTrans().add_sources(approach).add_destinations(turn45)
         PilotTrans().add_sources(approach).add_destinations(approach_pilot_event)
         NullTrans().add_sources(approach_pilot_event).add_destinations(wait_scan)
 
-        # --- knock action parent node & sequence flow ---
-        CompletionTrans().add_sources(knock_action).add_destinations(retreat)
-        FailureTrans().add_sources(knock_action).add_destinations(motion_failed)
+        # --- lightning-fast consecutive knock swipe flow (no type errors, perfect worldmap sync) ---
+        CompletionTrans().add_sources(turn45).add_destinations(nudge_right)
+        FailureTrans().add_sources(turn45).add_destinations(motion_failed)
 
-        CompletionTrans().add_sources(retreat).add_destinations(check_status)
+        CompletionTrans().add_sources(nudge_right).add_destinations(nudge_left)
+        FailureTrans().add_sources(nudge_right).add_destinations(motion_failed)
+
+        CompletionTrans().add_sources(nudge_left).add_destinations(turn_back)
+        FailureTrans().add_sources(nudge_left).add_destinations(motion_failed)
+
+        CompletionTrans().add_sources(turn_back).add_destinations(retreat)
+        FailureTrans().add_sources(turn_back).add_destinations(motion_failed)
+
+        CompletionTrans().add_sources(retreat).add_destinations(settle)
         FailureTrans().add_sources(retreat).add_destinations(motion_failed)
+
+        TimerTrans(SETTLE_BEFORE_CHECK_SEC).add_sources(settle).add_destinations(check_status)
 
         NullTrans().add_sources(motion_failed).add_destinations(wait_scan)
 
