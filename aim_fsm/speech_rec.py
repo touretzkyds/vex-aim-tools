@@ -5,10 +5,12 @@ import threading
 import queue
 import os
 import sys
+import pathlib
 import logging
 from playsound3 import playsound
 
 from .thesaurus import Thesaurus
+from .document_upload import DocumentError, prepare_document
 from .evbase import Event
 from .events import SpeechEvent
 
@@ -95,6 +97,56 @@ def handle_reset_fsm():
     else:
         pass
     return jsonify({'status': 'ok'})
+
+
+DOCUMENT_MAX_BYTES = 200 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = DOCUMENT_MAX_BYTES
+DOCUMENT_TEXT_MAX_BYTES = 200 * 1024  # text documents are re-sent to the LLM every turn
+
+@app.route('/api/upload-script', methods=['POST'])
+def handle_upload_script():
+    global robot
+    file = request.files.get('file')
+    if file is None or file.filename == '':
+        return jsonify({'status': 'error', 'error': 'no file'}), 400
+
+    data = file.read(DOCUMENT_MAX_BYTES + 1)
+    if len(data) > DOCUMENT_MAX_BYTES:
+        return jsonify({'status': 'error',
+                        'error': 'file is larger than %d MB' % (DOCUMENT_MAX_BYTES // (1024 * 1024))}), 400
+    try:
+        document = prepare_document(file.filename, data, DOCUMENT_TEXT_MAX_BYTES)
+    except DocumentError as exc:
+        return jsonify({'status': 'error', 'error': str(exc)}), 400
+
+    if document.kind == 'pdf':
+        try:
+            robot.openai_client.attach_pdf(document.saved_name, document.data)
+        except Exception as exc:
+            print("*** OpenAI PDF indexing failed: %s" % exc)
+            return jsonify({'status': 'error',
+                            'error': 'OpenAI could not accept this PDF: %s' % exc}), 502
+        print("Indexed PDF '%s' (%d bytes) for retrieval" %
+              (document.saved_name, len(document.data)))
+        return jsonify({'status': 'ok',
+                        'name': document.saved_name,
+                        'sourceBytes': len(data),
+                        'kind': document.kind})
+
+    dest = pathlib.Path.home() / 'Documents' / 'Celeste' / document.saved_name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(document.text, encoding='utf-8')
+    context = 'Contents of uploaded document "%s":\n\n%s' % (document.saved_name,
+                                                                document.text)
+    robot.loop.call_soon_threadsafe(robot.openai_client.note_for_later, context)
+    text_bytes = len(document.text.encode('utf-8'))
+    print("Loaded text '%s' (%d bytes) into Celeste's context" %
+          (document.saved_name, text_bytes))
+    return jsonify({'status': 'ok',
+                    'name': document.saved_name,
+                    'sourceBytes': len(data),
+                    'textBytes': text_bytes,
+                    'kind': document.kind})
 
 
 @app.route('/api/speech-to-text', methods=['POST'])
