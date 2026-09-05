@@ -228,6 +228,10 @@
       <button id="resetButton" class="round-button reset-button">
         <span>Reset</span><span>FSM</span>
       </button>
+      <button id="uploadButton" class="round-button">
+        <span>Load</span><span>File</span>
+      </button>
+      <input type="file" id="fileInput" accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf" style="display: none">
     </div>
     <div class="text-row">
       <textarea id="textInput" placeholder="Or type here and press Enter to send..." rows="3"></textarea>
@@ -255,6 +259,8 @@
       const consoleLog = document.getElementById('consoleLog');
       const copyTranscriptButton = document.getElementById('copyTranscriptButton');
       const resultDiv = document.getElementById('result');
+      const uploadButton = document.getElementById('uploadButton');
+      const fileInput = document.getElementById('fileInput');
 
       const modeOrder = ['live', 'edit', 'ptt'];
 
@@ -479,6 +485,52 @@
 
       liveMicButton.addEventListener('click', () => {
           setMode('live');
+      });
+
+      uploadButton.addEventListener('click', () => fileInput.click());
+
+      function showUploadStatus(message, isError = false) {
+          const line = document.createElement('p');
+          line.textContent = message;
+          if (isError) line.style.color = 'red';
+          resultDiv.appendChild(line);
+      }
+
+      fileInput.addEventListener('change', async () => {
+          const file = fileInput.files[0];
+          if (!file) return;
+          const body = new FormData();
+          body.append('file', file);
+          const buttonContents = uploadButton.innerHTML;
+          const controller = new AbortController();
+          uploadButton.disabled = true;
+          uploadButton.textContent = 'Loading…';
+          const timeout = setTimeout(() => controller.abort(), 15 * 60 * 1000);
+          try {
+              const response = await fetch('/api/upload-script',
+                                           { method: 'POST', body, signal: controller.signal });
+              const responseText = await response.text();
+              let result;
+              try {
+                  result = JSON.parse(responseText);
+              } catch (_) {
+                  throw new Error(`server returned ${response.status}: ${responseText || response.statusText}`);
+              }
+              if (!response.ok) throw new Error(result.error || `server returned ${response.status}`);
+              const detail = result.kind === 'pdf'
+                  ? `${result.sourceBytes} byte PDF indexed for retrieval`
+                  : `${result.textBytes} bytes`;
+              showUploadStatus(`Loaded ${result.name} (${detail})`);
+          } catch (error) {
+              showUploadStatus(error.name === 'AbortError'
+                  ? 'Upload timed out. The document may be too large to index.'
+                  : `Upload failed: ${error.message}`, true);
+          } finally {
+              clearTimeout(timeout);
+              uploadButton.disabled = false;
+              uploadButton.innerHTML = buttonContents;
+              fileInput.value = '';
+          }
       });
 
       resetButton.addEventListener('mousedown', () => {
