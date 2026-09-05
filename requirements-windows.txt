@@ -7,7 +7,7 @@ websocket_client
 flask
 flask_cors
 pyreadline3
-openai>=2.0.0
+openai>=3.8.0
 playsound3
 gTTS
 google-cloud-texttospeech
