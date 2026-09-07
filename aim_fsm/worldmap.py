@@ -1,6 +1,7 @@
 import math
 import copy
 import numpy as np
+import re
 import time
 import datetime
 import threading
@@ -11,6 +12,20 @@ from .utils import *
 from .camera import AIVISION_RESOLUTION_SCALE
 
 class WorldObject():
+
+    # Perception parameters; subclasses override only what differs.
+    confirmation_frames = 6          # sightings before a new object is added
+    pending_cost_threshold = 50      # squared mm, coherence gate for pending objects
+    association_cost_limit = 500     # squared mm, gate for re-observing a known object
+    max_sensor_distance = 300        # mm, beyond this a detection is deemed spurious
+    visible_distance_threshold = 400 # mm, past this we don't expect to see it at all
+    expects_continuous_sightings = True   # False for things seen only when looked for
+
+    @property
+    def match_key(self):
+        """Identity within a type.  None means position alone decides."""
+        return None
+
     def __init__(self, id=None, name=None, x=0, y=0, z=0, theta=None, is_visible=False, is_fixed=False):
         self.id = id
         self.pose = PoseEstimate(x, y, z, theta)
@@ -100,10 +115,51 @@ class AprilTagObj(WorldObject):
         self.base_diameter = 22 # mm
         self.width = 38 # mm
 
+    @property
+    def match_key(self):
+        return self.tag_id
+
     def __repr__(self):
         vis = 'visible' if self.is_visible else 'missing' if self.is_missing else 'unseen'
         return f'<{self.id or self.name} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f}) @ {self.pose.theta*180/pi:.1f} deg.>'
-    
+
+
+class OpenVocabObj(WorldObject):
+    """An object found by text-prompted detection, seen only when asked for."""
+
+    confirmation_frames = 1        # insert on sight: one detection arrives per
+                                   # dozen ticks, so a counter cannot accumulate
+    pending_cost_threshold = 400   # 20 mm
+    association_cost_limit = 2500  # 50 mm; a box at 500 mm carries about 12 mm
+                                   # of range error per pixel
+    max_sensor_distance = 500      # mm; further out the ground-plane projection
+                                   # is too noisy to recognize the object again
+    duplicate_cost_limit = 500     # squared mm (22.4 mm); yield to any object
+                                   # another detector already owns this close
+    visible_distance_threshold = 550   # must exceed max_sensor_distance, or an
+                                   # object we can detect is never noticed gone
+    expects_continuous_sightings = False
+
+    def __init__(self, detection, diameter=40, x=0, y=0, z=0, theta=None):
+        super().__init__(x=x, y=y, z=z, theta=theta)
+        self.label = detection['label']
+        self.matched_variant = detection['matched_variant']
+        # "coffee mug" -> coffee_mug, so the map key is coffee_mug.a
+        self.name = re.sub(r'\s+', '_', self.label.strip())
+        self.detection = detection   # not .spec: pilot.py duck-types on that name
+        self.diameter = diameter
+
+    @property
+    def match_key(self):
+        """The canonical label.  Keying on matched_variant would split one object
+        in two when a different phrasing wins on a later frame."""
+        return self.label
+
+    def __repr__(self):
+        vis = 'visible' if self.is_visible else 'missing' if self.is_missing else 'unseen'
+        return f'<{self.id or self.name} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f}) ' \
+               f'[{self.matched_variant} {self.detection["score"]:.2f}]>'
+
 
 class AprilTag0Obj(AprilTagObj):
     pass
@@ -121,6 +177,9 @@ class AprilTag4Obj(AprilTagObj):
     pass
 
 class ArucoMarkerObj(WorldObject):
+
+    expects_continuous_sightings = False
+
     def __init__(self, spec, x=0, y=0, z=0, theta=0, **kwargs):
         super().__init__(x=x, y=y, z=z, theta=theta, **kwargs)
         self.name = spec['name']
@@ -128,6 +187,10 @@ class ArucoMarkerObj(WorldObject):
         self.marker_id = spec['id']
         self.marker_string = 'ArucoMarker-' + str(spec['id'])
         self.pose_confidence = +1
+
+    @property
+    def match_key(self):
+        return self.marker_id
 
     def __repr__(self):
         if self.pose_confidence >= 0:
@@ -140,6 +203,8 @@ class ArucoMarkerObj(WorldObject):
         
 
 class WallObj(WorldObject):
+
+    expects_continuous_sightings = False
 
     def __init__(self, wall_spec, x=0, y=0, z=0, theta=0):
         super().__init__(x=x, y=y, z=z, theta=theta)
@@ -183,6 +248,9 @@ class WallSpec():
 
 
 class DoorwayObj(WorldObject):
+
+    expects_continuous_sightings = False
+
     def __init__(self, wall, index):
         name = f'Doorway-{wall.name[5:]}:{index}'
         super().__init__(name=name, is_visible=wall.is_visible)
@@ -245,6 +313,7 @@ class WorldMap():
         self.name_counts = dict()  # For generating new object names
         self.last_held_time = -1
         self.visibility_paused = False
+        self.openvocab_labels_this_tick = set()
 
     def __repr__(self):
         with self._lock:
@@ -300,7 +369,11 @@ class WorldMap():
 
     def make_new_objects_from_vision(self):
         self.candidates = list()
+        # which open-vocab labels we actually looked for on this tick; see
+        # detect_missing_objects
+        self.openvocab_labels_this_tick = set()
         self.make_new_aiv_objects()
+        self.make_new_openvocab_objects()
         if self.robot.aruco_detector:
             self.make_new_wall_objects()
             self.make_new_aruco_objects()
@@ -370,8 +443,8 @@ class WorldMap():
             x = objpos[0][0]
             y = objpos[1][0]
             distance = ((x - self.robot.pose.x)**2 + (y - self.robot.pose.y)**2) ** 0.5
-            MAX_DISTANCE = 300 # anything further than this is a spurious detection
-            if distance > MAX_DISTANCE:
+            # anything further than this is a spurious detection
+            if distance > obj.max_sensor_distance:
                 continue
             obj.sensor_distance = distance
             if isinstance(obj, AprilTagObj):
@@ -384,6 +457,56 @@ class WorldMap():
             if self.check_spec_indicates_held(obj):
                 self.reposition_held_object(obj)
             self.candidates.append(obj)
+
+    def make_new_openvocab_objects(self):
+        """Consume the detector's inbox and turn its boxes into candidates.
+
+        Like make_new_aiv_objects, except the boxes are already full resolution
+        (no AIVISION_RESOLUTION_SCALE), and the projection uses the pose captured
+        when the shutter fired: inference takes about 600 ms."""
+        batches = getattr(self.robot, 'openvocab_results', None)
+        if not batches:
+            return
+        while batches:
+            batch = batches.pop(0)
+            capture_pose = batch['capture_pose']
+            self.openvocab_labels_this_tick.add(batch['label'])
+            for detection in batch['detections']:
+                cx = detection['originx'] + detection['width'] / 2
+                cy = detection['originy'] + detection['height']
+                hit = self.robot.kine.project_to_ground(cx, cy)
+                angle = atan2(hit[1, 0], hit[0, 0])
+                contact_range = (hit[0, 0]**2 + hit[1, 0]**2) ** 0.5
+                # A box w pixels wide at range r spans w*r/focal_x millimetres.
+                focal_x = self.robot.camera.focal_length[0]
+                diameter = min(200, max(10, detection['width'] * contact_range / focal_x))
+                obj = OpenVocabObj(detection, diameter=diameter)
+                obj.is_visible = True
+                # push the floor contact point out to the object's center
+                half = diameter / 2
+                hit = hit + point(cos(angle) * half, sin(angle) * half, 0)
+                robotpos = point(capture_pose.x, capture_pose.y)
+                objpos = aboutZ(capture_pose.theta).dot(hit) + robotpos
+                x = objpos[0][0]
+                y = objpos[1][0]
+                distance = ((x - capture_pose.x)**2 + (y - capture_pose.y)**2) ** 0.5
+                if distance > obj.max_sensor_distance:
+                    continue
+                if self.claimed_by_another_detector(x, y, obj):
+                    continue
+                obj.sensor_distance = distance
+                obj.pose = Pose(x, y, 0, None)
+                self.candidates.append(obj)
+
+    def claimed_by_another_detector(self, x, y, obj):
+        """Does an object another detector owns already sit here?
+
+        Open-vocabulary detection yields to aivision and aruco.  A detection on
+        top of one of theirs would be a second map entry for one physical object,
+        and the two could never merge: association groups by exact type."""
+        return any(type(o) is not OpenVocabObj and
+                   (o.pose.x - x)**2 + (o.pose.y - y)**2 < obj.duplicate_cost_limit
+                   for o in self.objects.values())
 
     def make_new_aruco_objects(self):
         camera_offset_vector = np.array([0, 0, self.robot.kine.camera_from_origin])
@@ -569,12 +692,10 @@ class WorldMap():
         elif otype in (ArucoMarkerObj, WallObj, DoorwayObj):
             MAX_ACCEPTABLE_COST = np.inf  # should adjust based on pf undertainty
         else:
-            MAX_ACCEPTABLE_COST = 500  # should adjust based on pf undertainty
+            MAX_ACCEPTABLE_COST = otype.association_cost_limit  # should adjust based on pf undertainty
         for i in range(N_new):
             for j in range(N_old):
-                if otype is ArucoMarkerObj and new[i].marker_id != old[j].marker_id:
-                    costs[i,j] = MAX_ACCEPTABLE_COST + 1
-                elif otype is AprilTagObj and new[i].tag_id != old[j].tag_id:
+                if new[i].match_key != old[j].match_key:
                     costs[i,j] = MAX_ACCEPTABLE_COST + 1
                 else:
                     costs[i,j] = self.association_cost(new[i], old[j])
@@ -605,14 +726,18 @@ class WorldMap():
         dy = obj.pose.y - self.robot.pose.y
         bearing = wrap_angle(atan2(dy,dx) - self.robot.pose.theta)
         distance = (dx**2 + dy**2) ** 0.5
-        DISTANCE_THRESHOLD = 400 # mm
         BEARING_THRESHOLD = 30 # degrees
-        result = abs(bearing)*180/pi < BEARING_THRESHOLD and distance < DISTANCE_THRESHOLD
+        result = abs(bearing)*180/pi < BEARING_THRESHOLD and \
+            distance < obj.visible_distance_threshold
         return result
 
     def detect_missing_objects(self):
         for obj in self.objects.values():
-            if not isinstance(obj, (ArucoMarkerObj,WallObj,DoorwayObj)) and \
+            # An open-vocab object is expected only on the ticks where we looked
+            # for its label; otherwise not seeing it means nothing.
+            expected = obj.expects_continuous_sightings or \
+                getattr(obj, 'label', None) in self.openvocab_labels_this_tick
+            if expected and \
                obj not in self.updated_objects and self.should_be_visible(obj):
                 if obj not in self.missing_objects:
                     obj.is_visible = False
@@ -623,12 +748,11 @@ class WorldMap():
     def process_unassociated_objects(self):
         """
         The vision system produces lots of spurious objects, so we require
-        a new object to be seen 6 times in successive camera frames before
-        we add it to the world map.
+        a new object to be seen confirmation_frames times in successive camera
+        frames before we add it to the world map.
         """
         unassociated = [c for c in self.candidates if c.matched is None]
         pending = list(self.pending_objects.keys())
-        COST_THRESHOLD = 50
         if self.robot.particle_filter and \
            self.robot.particle_filter.state != self.robot.particle_filter.LOCALIZED:
             pass # return
@@ -639,11 +763,26 @@ class WorldMap():
                 #print('punting on', candidate, 'from', self.objects)
                 # only one aruco isn't enough to make a new wall
                 continue
-            matches = [p for p in pending if self.association_cost(candidate,p) < COST_THRESHOLD]
+            if candidate.confirmation_frames <= 1:
+                # Seen only when asked for: it appears in a single update() tick,
+                # so the pending counter below can never accumulate.
+                if not self.reclaim_object(candidate):
+                    candidate.id = self.next_in_sequence(candidate.name)
+                    candidate.pose = PoseEstimate(candidate.pose)
+                    self.objects[candidate.id] = candidate
+                    candidate.is_visible = True
+                    print('Added', candidate)
+                    self.updated_objects.append(candidate)
+                continue
+            # match_key is None for aivision objects, leaving a pure proximity
+            # test; it separates markers by id and open-vocab objects by label.
+            matches = [p for p in pending
+                       if p.match_key == candidate.match_key
+                       and self.association_cost(candidate,p) < candidate.pending_cost_threshold]
             if matches:
                 m = matches[0]
                 self.pending_objects[m] += 1
-                if self.pending_objects[m] >= 6:
+                if self.pending_objects[m] >= candidate.confirmation_frames:
                     if self.reclaim_object(candidate):
                         pass
                     else:
@@ -664,10 +803,7 @@ class WorldMap():
     def reclaim_object(self, obj):
         t = type(obj)
         missing = [m for m in self.missing_objects if type(m) == t]
-        if hasattr(obj,'marker_id'):
-            missing = [m for m in missing if m.marker_id == obj.marker_id]
-        if hasattr(obj,'tag_id'):
-            missing = [m for m in missing if m.tag_id == obj.tag_id]
+        missing = [m for m in missing if m.match_key == obj.match_key]
         if len(missing) == 0:
             return None
         costs = [self.association_cost(obj, m) for m in missing]
