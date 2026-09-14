@@ -271,7 +271,7 @@ class SoundActuator(Actuator):
     # Active selection:
     TTS_API = 'google'
     TTS_VOICE = 'en-US-Journey-F'
-    TTS_PARAMS = {'language_code': 'en-US'}
+    TTS_PARAMS = {'language_code': 'en-US', 'model_name': None}
     # ------------------------------------------------------------------------
 
     def __init__(self, robot):
@@ -304,11 +304,10 @@ class SoundActuator(Actuator):
             # If no credentials, will look in GOOGLE_APPLICATION_CREDENTIALS environment var.
             if creds or google_env:
                 self.tts_client = texttospeech.TextToSpeechClient(credentials = creds)
-            self.tts_voice = texttospeech.VoiceSelectionParams(
-                language_code="en-US",
-                name="en-US-Journey-F",
-                ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
-            )
+            self.tts_voice = texttospeech.VoiceSelectionParams()
+            self.tts_voice.language_code="en-US"
+            self.tts_voice.name="en-US-Journey-F"
+            self.tts_voice.ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
             self.tts_audio_config = texttospeech.AudioConfig(
                 audio_encoding=texttospeech.AudioEncoding.MP3
             )
@@ -631,7 +630,7 @@ class SoundActuator(Actuator):
                 return
             # Default: Google Cloud when credentials are available.
             if self.tts_client is not None:
-                self.synthesize_google(text, speech_file_path, voice, params)
+                self.synthesize_google(text, speech_file_path, voice, None, params)
                 return
             # No Google credentials: fall through to the gTTS fallback below.
         except Exception as e:
@@ -643,14 +642,15 @@ class SoundActuator(Actuator):
             print(f'*** gTTS fallback failed: {e}')
             raise
 
-    def synthesize_google(self, text, speech_file_path, voice=None, params=None):
+    def synthesize_google(self, text, speech_file_path, voice=None, model=None, params=None):
         params = params or dict()
         voice_name = voice or params.get('voice') or self.tts_voice.name
+        model_name = model or params.get('model_name') or self.tts_voice.model_name
         language_code = params.get('language_code', self.tts_voice.language_code)
-        tts_voice = texttospeech.VoiceSelectionParams(
-            language_code = language_code,
-            name = voice_name,
-        )
+        tts_voice = texttospeech.VoiceSelectionParams()
+        tts_voice.language_code = language_code
+        tts_voice.name = voice_name
+        tts_voice.model_name = model_name
         synthesis_input = texttospeech.SynthesisInput(text=text)
         response = self.tts_client.synthesize_speech(
             input = synthesis_input,

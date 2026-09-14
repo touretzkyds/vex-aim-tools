@@ -7,6 +7,7 @@ import os
 import sys
 import pathlib
 import logging
+import time
 from playsound3 import playsound
 
 from .thesaurus import Thesaurus
@@ -140,7 +141,7 @@ def handle_upload_script():
                                                                 document.text)
     robot.loop.call_soon_threadsafe(robot.openai_client.note_for_later, context)
     text_bytes = len(document.text.encode('utf-8'))
-    print("Loaded text '%s' (%d bytes) into Celeste's context" %
+    print("Loaded text '%s' (%d bytes) into character's context" %
           (document.saved_name, text_bytes))
     return jsonify({'status': 'ok',
                     'name': document.saved_name,
@@ -157,6 +158,8 @@ def handle_speech_to_text():
     return jsonify({'status': 'ok'})
 
 class SpeechListener():
+    UTTERANCE_EXPIRATION_TIME = 10 # seconds
+
     def __init__(self, _robot, thesaurus=Thesaurus(), debug=False, confirmation_bell=False):
         global robot, speech_listener
         robot = _robot
@@ -168,6 +171,7 @@ class SpeechListener():
         self.debug = debug
         self.enabled = True
         self.paused = False  # speaking pauses the listener
+        self.utterance_queue = []  # list of tuples of form (time, string)
 
     def run_flask(self):
         # Suppress the default Flask logging
@@ -217,12 +221,26 @@ class SpeechListener():
             this_dir = os.path.dirname(os.path.abspath(__file__))
             media_path = os.path.abspath(os.path.join(this_dir, '..', 'media', 'acknowledge4.mp3'))
             playsound(media_path)
-        print("Heard: '%s'" % string)
-        sys.stdout.flush()
-        add_to_transcript("Heard: '%s'" % string)
-        event = SpeechEvent(string, words)
-        self.robot.erouter.post(event)
+        self.append_utterance_queue(string, words)
+        if self.robot.erouter.dispatch_table.get(SpeechEvent):
+            self.pop_utterance_queue()
         
+    def append_utterance_queue(self, string, words):
+        self.utterance_queue.append([time.time(), string, words])
+
+    def pop_utterance_queue(self):
+        if not self.utterance_queue:
+            return
+        (creation_time, string, words) = self.utterance_queue.pop(0)
+        if time.time() - creation_time <= self.UTTERANCE_EXPIRATION_TIME:
+            print("Heard: '%s'" % string)
+            sys.stdout.flush()
+            add_to_transcript("Heard: '%s'" % string)
+            event = SpeechEvent(string, words)
+            self.robot.erouter.post(event)
+        else:  # entry was stale; try the next one
+            self.pop_utterance_queue()
+
     def start(self):
         if self.robot.flask_thread:
             return
