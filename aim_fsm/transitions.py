@@ -121,56 +121,6 @@ class TimerTrans(Transition):
         self.fire()
 
 
-class TapTrans(Transition):
-    """Transition fires when a cube is tapped."""
-    def __init__(self,cube=None):
-        super().__init__()
-        self.cube = cube
-
-    def start(self):
-        if self.running: return
-        super().start()
-        if self.cube:
-            self.robot.erouter.add_listener(self,TapEvent,self.cube)
-        else:
-            self.robot.erouter.add_wildcard_listener(self,TapEvent,None)
-
-    def handle_event(self,event):
-        if not self.running: return
-        super().handle_event(event)
-        if self.cube:
-            self.fire(event)
-        else:
-            self.handle = \
-                self.robot.loop.call_later(Transition.default_value_delay, self.fire, event)
-
-
-class ObservedMotionTrans(Transition):
-    """Transition fires when motion is observed in the camera image."""
-    def start(self):
-        if self.running: return
-        super().start()
-        self.robot.erouter.add_listener(self,ObservedMotionEvent,None)
-
-    def handle_event(self,event):
-        if not self.running: return
-        super().handle_event(event)
-        self.fire(event)
-
-
-class UnexpectedMovementTrans(Transition):
-    """Transition fires when unexpected movement is detected."""
-    def start(self):
-        if self.running: return
-        super().start()
-        self.robot.erouter.add_listener(self,UnexpectedMovementEvent,None)
-
-    def handle_event(self,event):
-        if not self.running: return
-        super().handle_event(event)
-        self.fire(event)
-
-
 class DataTrans(Transition):
     """Transition fires when data matches."""
     def __init__(self, data=None):
@@ -264,6 +214,11 @@ class HearTrans(PatternMatchTrans):
     """Transition fires if speech event matches pattern."""
     def __init__(self,pattern=None):
         super().__init__(pattern,SpeechEvent)
+
+    def start(self):
+        super().start()
+        self.robot.speech_listener.pop_utterance_queue()
+
 
 class OpenAITrans(Transition):
     def start(self):
