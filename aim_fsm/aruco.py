@@ -70,7 +70,10 @@ class RobotArucoDetector(object):
         # Estimate poses
         for i in range(len(self.corners)):
             image_corners = self.corners[i]
-            id = int(self.ids[i][0])
+            if type(ids[i]) is np.ndarray:  # OpenCV 4.x
+                id = int(ids[i][0])
+            else: # OpenCV 5.0
+                id = int(ids[i])
             try:
                 success, rvec, tvec = cv2.solvePnP(self.object_corners,
                                                    image_corners,
