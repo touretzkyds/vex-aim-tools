@@ -8,7 +8,7 @@ from math import nan, isnan
 from .geometry import wrap_angle
 
 from .rrt_shapes import *
-from .worldmap import BarrelObj, SportsBallObj, AprilTagObj, ArucoMarkerObj, WallObj, DoorwayObj, RoomObj
+from .worldmap import BarrelObj, SportsBallObj, AprilTagObj, ArucoMarkerObj, WallObj, DoorwayObj, RoomObj, OpenVocabObj
 from .aruco import ARUCO_MARKER_SIZE
 
 # *** TODO: Collision checking needs to use opposite headings
@@ -513,7 +513,9 @@ class RRT():
         for obj in self.robot.world_map.objects.values():
             if (not obj.is_obstacle) or obj.is_missing or (self.robot.holding is obj):
                 continue
-            if isinstance(obj, BarrelObj):
+            if isinstance(obj, OpenVocabObj):
+                obst = self.generate_openvocab_obstacle(obj, obstacle_inflation)
+            elif isinstance(obj, BarrelObj):
                 obst = self.generate_barrel_obstacle(obj, obstacle_inflation)
             elif isinstance(obj, SportsBallObj):
                 obst = self.generate_ball_obstacle(obj, obstacle_inflation)
@@ -598,6 +600,13 @@ class RRT():
         s = Circle(center=geometry.point(ball.pose.x, ball.pose.y),
                    radius = ball.diameter/2 + inflation)
         s.obstacle_id = ball.id
+        return s
+
+    @staticmethod
+    def generate_openvocab_obstacle(obj, inflation=0):
+        s = Circle(center=geometry.point(obj.pose.x, obj.pose.y),
+                   radius = obj.diameter/2 + inflation)
+        s.obstacle_id = obj.id
         return s
 
     @staticmethod

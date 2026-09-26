@@ -90,6 +90,35 @@ def draw_aiobj_boxes(img_rgb: _np.ndarray, items: Iterable[dict], scale: int) ->
         _draw_rect_numpy(img_rgb, x, y, x1, y1, color)
 
 
+_OPENVOCAB_COLOR = (0, 255, 128)
+
+
+def draw_openvocab_boxes(img_rgb: _np.ndarray, detections: Iterable[dict]) -> None:
+    """Draw open-vocabulary boxes and labels in full-resolution image coordinates."""
+    if img_rgb is None or img_rgb.ndim != 3:
+        return
+    for d in detections:
+        try:
+            x = int(round(d["originx"]))
+            y = int(round(d["originy"]))
+            x1 = int(round(d["originx"] + d["width"]))
+            y1 = int(round(d["originy"] + d["height"]))
+            caption = f'{d.get("label", "")} {d.get("score", 0):.2f}'
+        except Exception:  # pragma: no cover - corrupted record
+            continue
+        if _cv2 is not None:
+            try:
+                _cv2.rectangle(img_rgb, (x, y), (x1, y1), _OPENVOCAB_COLOR,
+                               thickness=2, lineType=_cv2.LINE_8)
+                _cv2.putText(img_rgb, caption, (x, max(12, y - 5)),
+                             _cv2.FONT_HERSHEY_SIMPLEX, 0.45, _OPENVOCAB_COLOR, 1,
+                             _cv2.LINE_AA)
+                continue
+            except Exception:
+                pass
+        _draw_rect_numpy(img_rgb, x, y, x1, y1, _OPENVOCAB_COLOR)
+
+
 def draw_tag_quads(img_rgb: _np.ndarray, items: Iterable[dict], scale: int) -> None:
     if img_rgb is None or img_rgb.ndim != 3:
         return
@@ -121,6 +150,7 @@ def apply_overlays(
     status: Optional[dict],
     scale: int,
     aruco_detector: Optional[object],
+    openvocab_detector: Optional[object] = None,
 ) -> _np.ndarray:
     if image_rgb is None or image_rgb.ndim != 3:
         return image_rgb
@@ -162,7 +192,18 @@ def apply_overlays(
         except Exception:
             pass
 
+    if openvocab_detector is not None:
+        try:
+            # Hide boxes when motion has changed the captured view.
+            robot = getattr(openvocab_detector, "robot", None)
+            captured_at = getattr(openvocab_detector, "last_detection_moving_frame", None)
+            if captured_at is not None and getattr(robot, "moving_frame", None) == captured_at:
+                draw_openvocab_boxes(out, getattr(openvocab_detector, "last_detections", []))
+        except Exception:
+            pass
+
     return out
 
 
-__all__ = ["apply_overlays", "draw_aiobj_boxes", "draw_tag_quads"]
+__all__ = ["apply_overlays", "draw_aiobj_boxes", "draw_tag_quads",
+           "draw_openvocab_boxes"]

@@ -571,6 +571,37 @@ View3D {
     }
 
     Component {
+        id: openvocabDelegate
+        Node {
+            id: openvocabRoot
+            property var model
+            parent: sceneFrame
+            // Approximate dimensions estimated from the camera bounding box.
+            readonly property real radiusMm: (model.diameter_mm || 40) / 2
+            readonly property real heightMm: model.height_mm || 40
+            position: Qt.vector3d(model.x, model.y, model.z)
+            eulerRotation.z: radiansToDegrees(model.theta)
+
+            readonly property color sampledColor: model.color || "#35d07f"
+
+            Model {
+                source: "#Cylinder"
+                eulerRotation.x: 90
+                scale: Qt.vector3d(parent.radiusMm / 50, parent.heightMm / 100, parent.radiusMm / 50)
+                opacity: model.missing ? 0.35 : 1.0
+                materials: PrincipledMaterial {
+                    baseColor: model.visible ? openvocabRoot.sampledColor
+                                             : Qt.darker(openvocabRoot.sampledColor, 1.7)
+                    roughness: 0.45
+                    cullMode: Material.NoCulling
+                    emissiveFactor: model.visible ? Qt.vector3d(0.05, 0.05, 0.05)
+                                                  : Qt.vector3d(0, 0, 0)
+                }
+            }
+        }
+    }
+
+    Component {
         id: markerDelegate
         Node {
             id: markerRoot
@@ -839,6 +870,8 @@ View3D {
                 case "apriltag":
                 case "aruco":
                     return markerDelegate
+                case "openvocab":
+                    return openvocabDelegate
                 case "wall":
                     return wallDelegate
                 default:
@@ -895,6 +928,27 @@ View3D {
         parent: sceneFrame
         model: worldModel
         delegate: worldDelegate
+    }
+
+    // Screen-space labels remain legible as the camera moves or zooms.
+    Repeater {
+        model: worldModel
+        delegate: Text {
+            readonly property vector3d scenePos:
+                sceneFrame.mapPositionToScene(Qt.vector3d(model.x, model.y,
+                                                          model.z + (model.height_mm || 40) / 2 + 20))
+            readonly property vector3d screenPos: worldView.mapFrom3DScene(scenePos)
+
+            visible: model.type === "openvocab" && screenPos.z > 0
+            text: model.label || ""
+            x: screenPos.x - width / 2
+            y: screenPos.y - height
+            color: model.missing ? "#c08a6a" : "#ffffff"
+            font.pixelSize: 13
+            font.bold: true
+            style: Text.Outline
+            styleColor: "#101010"
+        }
     }
 
     Keys.onPressed: function(event) {

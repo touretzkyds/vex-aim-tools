@@ -72,7 +72,7 @@ class StateMachineProgram(StateNode):
         self.robot.robot0.set_xy_position(0,0)
         self.robot.robot0.inertial.set_heading(0)
         if openai_model is not None:
-            self.robot.openai_client.model = openai_model
+            self.robot.openai_client.model = self.robot.openai_client.provider_model(openai_model)
         # print(f'OpenAI model: {self.robot.openai_client.model}')  # if wish to show the model in use
 
         if not hasattr(self.robot, 'erouter'):

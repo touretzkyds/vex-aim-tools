@@ -61,6 +61,9 @@ class Robot():
         self.camera_image = None
         self.frame_count = 0    # camera images received so far
         self.moving_frame = 0   # last camera image when robot was moving
+        self.openvocab_results = []   # detection batches awaiting world map ingestion
+        self.openvocab_detector = None
+        self.start_openvocab_detector()
         self.status = self.robot0._ws_status_thread.current_status['robot']
         robot0._ws_status_thread.callback = self.status_callback
         robot0._ws_img_thread.callback = self.image_callback
@@ -70,6 +73,24 @@ class Robot():
         self.speech_listener = SpeechListener(self, self.thesaurus, debug=False)
         if launch_speech_listener:
             self.loop.call_soon_threadsafe(self.speech_listener.start)
+
+    def start_openvocab_detector(self):
+        """Initialize and warm the optional detector on a background thread."""
+        try:
+            from .openvocab import OpenVocabDetector
+            self.openvocab_detector = OpenVocabDetector(self)
+        except Exception as e:
+            print(f'Open-vocabulary detection unavailable: {e}')
+            return
+
+        def warm():
+            try:
+                self.openvocab_detector.warm_up()
+            except Exception as e:
+                print(f'Open-vocabulary detection unavailable: {e}')
+                self.openvocab_detector = None
+
+        threading.Thread(target=warm, daemon=True).start()
 
     def signal_handler(self, x,y):
         self.abort_all_actions()
