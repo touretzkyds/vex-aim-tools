@@ -152,13 +152,16 @@ class CameraImageProvider(QQuickImageProvider):
 
         status = self._resolve_status()
 
-        overlays_requested = bool((status or {}).get("aivision") or self._aruco_detector)
+        openvocab = getattr(self._robot_ref, "openvocab_detector", None)
+        overlays_requested = bool((status or {}).get("aivision") or self._aruco_detector
+                                  or openvocab)
         if overlays_requested:
             maybe = apply_overlays(
                 annotated,
                 status,
                 int(AIVISION_RESOLUTION_SCALE) or 1,
                 self._aruco_detector,
+                openvocab,
             )
             if isinstance(maybe, _np.ndarray) and maybe.ndim == 3:
                 annotated = maybe.copy()

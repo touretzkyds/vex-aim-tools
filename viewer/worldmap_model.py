@@ -12,6 +12,7 @@ from aim_fsm.worldmap import (
     ArucoMarkerObj,
     BarrelObj,
     BlueBarrelObj,
+    OpenVocabObj,
     OrangeBarrelObj,
     SportsBallObj,
     WallObj,
@@ -80,6 +81,8 @@ class WorldMapModel(QAbstractListModel):
         "thickness_mm",
         "size_mm",
         "marker_id",
+        "label",
+        "color",
         "doorways",
         "holding",
     )
@@ -219,6 +222,14 @@ class WorldMapModel(QAbstractListModel):
             entry["diameter_mm"] = diameter
             entry["height_mm"] = height
             entry["z"] = height / 2.0 if height else entry["z"]
+        elif type_name == "openvocab":
+            diameter = _to_float(getattr(obj, "diameter", None), 40.0)
+            height = _to_float(getattr(obj, "height", None), diameter)
+            entry["diameter_mm"] = diameter
+            entry["height_mm"] = height
+            entry["label"] = getattr(obj, "label", "")
+            entry["color"] = getattr(obj, "color", None) or "#35d07f"
+            entry["z"] = height / 2.0
         elif type_name == "apriltag":
             # Legacy: width=38mm (Y-axis), height=48mm (Z-axis), thickness=2mm (X-axis)
             # tag_size = (2, 38, 48) in legacy worldmap_viewer.py line 853
@@ -278,6 +289,8 @@ class WorldMapModel(QAbstractListModel):
 
     @staticmethod
     def _resolve_type(obj: Any) -> Optional[str]:
+        if isinstance(obj, OpenVocabObj):
+            return "openvocab"
         if isinstance(obj, SportsBallObj):
             return "sports_ball"
         # Check barrel subclasses first (before base class)

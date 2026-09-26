@@ -4,3 +4,7 @@ notes.txt
 snapshots
 *.py.old
 .DS_Store
+.openrouter-key
+.env
+overlay_preview.png
+/tests/

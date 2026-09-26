@@ -75,12 +75,7 @@ class Robot():
             self.loop.call_soon_threadsafe(self.speech_listener.start)
 
     def start_openvocab_detector(self):
-        """Build the open-vocabulary detector and warm it in the background.
-
-        Optional: the weights are a 320 MB download and torch is not in every
-        install, so any failure here leaves openvocab_detector as None and costs
-        nothing else.  Warming takes about 4 seconds; a detection issued meanwhile
-        waits on the detector's own lock rather than failing."""
+        """Initialize and warm the optional detector on a background thread."""
         try:
             from .openvocab import OpenVocabDetector
             self.openvocab_detector = OpenVocabDetector(self)

@@ -1,0 +1,8 @@
+# Optional: install after the normal platform requirements.
+# Versions used in the development environment; other platforms need validation.
+ultralytics==8.4.138
+torch==2.14.0
+torchvision==0.29.0
+
+# Tokenizer used by MobileCLIPTS; avoid runtime auto-installation.
+clip @ https://github.com/ultralytics/CLIP/archive/a13192f8cb767260d7dfd98c843b0716593169e7.zip
