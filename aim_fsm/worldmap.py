@@ -56,6 +56,70 @@ def _mean_xy(points):
     return (sx / len(points), sy / len(points))
 
 
+def canonical_face_label(face_label):
+    """Report the higher pip count first (e.g. '6-4', never '4-6').
+
+    A domino's identity is viewpoint-independent -- which half the camera
+    happened to see on the left doesn't belong in the label at all. That
+    belongs in orientation/flipped/theta instead (see classify_domino_pose).
+    """
+    if face_label and '-' in str(face_label):
+        try:
+            a, b = str(face_label).split('-')
+            a, b = int(a), int(b)
+            hi, lo = (a, b) if a >= b else (b, a)
+            return f'{hi}-{lo}'
+        except ValueError:
+            pass
+    return face_label or '0-0'
+
+
+def classify_domino_pose(half_counts, is_fallen, theta):
+    """Derive a viewpoint-independent orientation/flipped/theta for a domino.
+
+    face_label is the domino's identity
+    (viewpoint-independent, always canonical/higher-pip-first); which way
+    it happens to be facing the camera belongs in theta (flat dominoes) or
+    a separate `flipped` flag (edgewise/vertical), never in the label.
+
+    Returns (orientation, flipped, adjusted_theta).
+    - orientation: 'flat' (was 'fallen') or 'edgewise' (was 'standing').
+      'vertical' isn't produced yet -- the standing/fallen YOLO models
+      don't distinguish it from edgewise; reserved for later.
+    - flipped: True/False for edgewise (and eventually vertical) -- True
+      if the lower pip count appears on the left (or, for vertical, on
+      top) in the raw camera reading. Always False for symmetric dominoes
+      (e.g. '5-5'), since swapping identical halves changes nothing. None
+      for flat dominoes, where this same ambiguity is folded into
+      adjusted_theta instead.
+    - adjusted_theta: theta, corrected by pi when a flat domino's raw
+      camera reading came in reversed from canonical order; for symmetric
+      flat dominoes, additionally wrapped into [-pi/2, pi/2) since a
+      180-degree rotation looks identical.
+    """
+    left_pred, right_pred = (half_counts or (None, None))
+    is_symmetric = (
+        left_pred is not None and right_pred is not None and left_pred == right_pred
+    )
+    reversed_from_canonical = (
+        left_pred is not None
+        and right_pred is not None
+        and not is_symmetric
+        and left_pred < right_pred
+    )
+
+    if is_fallen:
+        adjusted_theta = theta
+        if reversed_from_canonical and adjusted_theta is not None:
+            adjusted_theta = normalize_axis_angle(adjusted_theta + pi)
+        if is_symmetric and adjusted_theta is not None:
+            adjusted_theta = ((adjusted_theta + pi / 2.0) % pi) - pi / 2.0
+        return 'flat', None, adjusted_theta
+
+    flipped = False if is_symmetric else reversed_from_canonical
+    return 'edgewise', flipped, theta
+
+
 class WorldObject():
     def __init__(self, id=None, name=None, x=0, y=0, z=0, theta=None, is_visible=False, is_fixed=False):
         self.id = id
@@ -140,6 +204,10 @@ class WorldObject():
             self.matched.confidence = self.confidence
         if hasattr(self, 'is_fallen'):
             self.matched.is_fallen = self.is_fallen
+        if hasattr(self, 'orientation'):
+            self.matched.orientation = self.orientation
+        if hasattr(self, 'flipped'):
+            self.matched.flipped = self.flipped
 
 
 class BarrelObj(WorldObject):
@@ -320,10 +388,17 @@ class RoomObj(WorldObject):
 
 class DominoObj(WorldObject):
     def __init__(self, id=None, x=0, y=0, z=0, theta=0, face_label=None, face_confidence=None, is_fallen=False):
+        face_label = canonical_face_label(face_label)
         super().__init__(id=id, name='Domino', x=x, y=y, z=z, theta=normalize_axis_angle(theta))
         self.length = KNOWN_LENGTH_MM
         self.is_fallen = is_fallen
-        
+        # Defaults; make_new_domino_objects() overwrites these with the
+        # actual computed values once it knows half_counts (needed to tell
+        # flipped from unflipped). "vertical" isn't produced yet -- the
+        # standing/fallen YOLO models don't distinguish it from edgewise.
+        self.orientation = 'flat' if is_fallen else 'edgewise'
+        self.flipped = None
+
         if is_fallen:
             self.width = 24.0
             self.height = 8.0
@@ -350,8 +425,13 @@ class DominoObj(WorldObject):
         vis = 'visible' if self.is_visible else 'missing' if self.is_missing else 'unseen'
         theta_deg = 0.0 if self.pose.theta is None else self.pose.theta * 180 / pi
         face = f' {self.face_label}' if self.face_label else ''
-        status = ' fallen' if self.is_fallen else ' standing'
-        return f'<{self.id or self.name}{face}{status} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f}) @ {theta_deg:.1f} deg.>'
+        orientation = getattr(self, 'orientation', None) or ('flat' if self.is_fallen else 'edgewise')
+        if orientation == 'flat':
+            pose_desc = ' flat'
+        else:
+            flipped = getattr(self, 'flipped', None)
+            pose_desc = f' {orientation} {"flipped" if flipped else "unflipped"}'
+        return f'<{self.id or self.name}{face}{pose_desc} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f}) @ {theta_deg:.1f} deg.>'
 
 
 ################################################################
@@ -563,20 +643,25 @@ class WorldMap():
             is_fallen = bool(getattr(obs, 'is_fallen', False))
             z_pos = 4.0 if is_fallen else 12.0
 
+            half_counts = getattr(obs, "half_counts", None)
+            orientation, flipped, adjusted_theta = classify_domino_pose(half_counts, is_fallen, world_theta)
+
             obj = DominoObj(
                 x=world_x, 
                 y=world_y, 
                 z=z_pos, 
-                theta=world_theta,
+                theta=adjusted_theta,
                 face_label=obs.face_label, 
                 face_confidence=obs.face_confidence,
                 is_fallen=is_fallen
             )
+            obj.orientation = orientation
+            obj.flipped = flipped
             
             if not hasattr(obj.pose, 'update'):
                 obj.pose = PoseEstimate(obj.pose)
 
-            obj.half_counts = getattr(obs, "half_counts", None)
+            obj.half_counts = half_counts
 
             obj.sensor_distance = calibrated_distance_mm
             obj.sensor_bearing = math.atan2(local_y, local_x)
@@ -895,6 +980,8 @@ class WorldMap():
             match.face_confidence = getattr(obj, 'face_confidence', None)
             match.confidence = getattr(obj, 'confidence', None)
             match.is_fallen = getattr(obj, 'is_fallen', False)
+            match.orientation = getattr(obj, 'orientation', None)
+            match.flipped = getattr(obj, 'flipped', None)
         self.updated_objects.append(match)
         self.missing_objects.remove(match)
         return match
