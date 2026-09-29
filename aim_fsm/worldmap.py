@@ -17,6 +17,15 @@ DOMINO_PENDING_COST_THRESHOLD = 225.0
 GROUND_PROJECTION_K1 = 1.55
 GROUND_PROJECTION_K2 = -58.4
 
+# How long a DominoObj can sit as "missing" before we drop it from the
+# world map entirely. Dominoes are perceptually noisy (misreads, occlusion
+# during a flip, etc.), so a transient candidate that briefly clears the
+# 6-frame confirmation threshold should still get cleaned up eventually
+# rather than sitting in `show objects` forever. Other object types (walls,
+# barrels, AprilTags, ...) are left alone - those represent longer-lived
+# landmarks a robot may legitimately look away from and back to.
+DOMINO_MISSING_TIMEOUT_SEC = 5.0
+
 # Target Calibration Parameters
 KNOWN_LENGTH = 4.8      # Domino length in cm
 KNOWN_LENGTH_MM = 48.0  # Domino length in mm
@@ -77,7 +86,7 @@ def canonical_face_label(face_label):
 def classify_domino_pose(half_counts, is_fallen, theta):
     """Derive a viewpoint-independent orientation/flipped/theta for a domino.
 
-    face_label is the domino's identity
+    Per Dave's 8 Sept design note: face_label is the domino's identity
     (viewpoint-independent, always canonical/higher-pip-first); which way
     it happens to be facing the camera belongs in theta (flat dominoes) or
     a separate `flipped` flag (edgewise/vertical), never in the label.
@@ -494,6 +503,7 @@ class WorldMap():
             self.associate_objects()
             self.update_associated_objects()
             self.detect_missing_objects()
+            self.prune_stale_domino_objects()
             self.process_unassociated_objects()
             self.update_visibilities()
             self.update_holding()
@@ -905,6 +915,7 @@ class WorldMap():
         return result
 
     def detect_missing_objects(self):
+        now = time.time()
         for obj in self.objects.values():
             if getattr(obj, 'is_fixed', False):
                 continue
@@ -913,7 +924,23 @@ class WorldMap():
                 if obj not in self.missing_objects:
                     obj.is_visible = False
                     obj.is_missing = True
+                    obj.missing_since = now
                     self.missing_objects.append(obj)
+
+    def prune_stale_domino_objects(self):
+        """Remove DominoObj entries that have been missing for longer than
+        DOMINO_MISSING_TIMEOUT_SEC. See the constant's comment for why this
+        is scoped to dominoes only."""
+        now = time.time()
+        stale = [
+            obj for obj in self.missing_objects
+            if isinstance(obj, DominoObj)
+            and (now - getattr(obj, 'missing_since', now)) > DOMINO_MISSING_TIMEOUT_SEC
+        ]
+        for obj in stale:
+            self.missing_objects.remove(obj)
+            if self.objects.get(obj.id) is obj:
+                del self.objects[obj.id]
 
     def process_unassociated_objects(self):
         unassociated = [c for c in self.candidates if c.matched is None]
