@@ -62,14 +62,27 @@ class RobotArucoDetector(object):
             ], dtype=np.float32)
 
     def process_image(self,gray):
-        self.seen_marker_ids = []
-        self.seen_marker_objects = dict()
-        (self.corners, self.ids, _) = self.detector.detectMarkers(gray)
-        if self.ids is None: return
+        seen_marker_ids = []
+        seen_marker_objects = dict()
+        last_image_shape = gray.shape[:2]
+        corners, ids, _ = self.detector.detectMarkers(gray)
+        # The detector returns np.float32 values, but we need these to
+        # be float64 for JSON serialization to work on any values
+        # derived from these.
+        corners = tuple(np.float64(corner_array) for corner_array in corners)
+
+        if ids is None:
+            with self._lock:
+                self.seen_marker_ids = seen_marker_ids
+                self.seen_marker_objects = seen_marker_objects
+                self._last_image_shape = last_image_shape
+                self.corners = []
+                self.ids = None
+            return
 
         # Estimate poses
-        for i in range(len(self.corners)):
-            image_corners = self.corners[i]
+        for i in range(len(corners)):
+            image_corners = corners[i]
             if type(ids[i]) is np.ndarray:  # OpenCV 4.x
                 id = int(ids[i][0])
             else: # OpenCV 5.0
@@ -81,7 +94,7 @@ class RobotArucoDetector(object):
                                                    self.robot.camera.distortion_array)
             except Exception as e:
                 print(f'Aruco detector: solvePnP failed:', e)
-                return
+                continue
             if id in self.disabled_ids: continue
             if rvec[2][0] > math.pi/2 or rvec[2][0] < -math.pi/2:
                 # can't see a marker facing away from us, so bogus
@@ -89,8 +102,15 @@ class RobotArucoDetector(object):
                       f'rvec={(rvec*180/pi).tolist()}')
                 continue
             marker = ArucoMarker(self, id, image_corners, tvec, rvec)
-            self.seen_marker_ids.append(id)
-            self.seen_marker_objects[id] = marker
+            seen_marker_ids.append(id)
+            seen_marker_objects[id] = marker
+
+        with self._lock:
+            self.seen_marker_ids = seen_marker_ids
+            self.seen_marker_objects = seen_marker_objects
+            self._last_image_shape = last_image_shape
+            self.corners = corners
+            self.ids = ids
 
     def annotate(self, image, scale_factor):
         scaled_corners = [ np.multiply(corner, scale_factor) for corner in self.corners ]
