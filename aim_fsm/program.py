@@ -1,3 +1,27 @@
+import os
+
+# Must be set before any Qt-based viewer module is imported below, or the
+# rules have no effect. Silences noisy Qt scenegraph/qobject-connect chatter
+# that otherwise floods the console (and seems to be tied to instability in the worldmap viewer during long runs).
+os.environ.setdefault(
+    "QT_LOGGING_RULES",
+    "qt.core.qobject.connect=false;"
+    "qt.qpa.*=false;"
+    "qt.scenegraph.*=false;"
+    "*.debug=false",
+)
+
+import logging
+
+# Ultralytics (via torch) has been emitting a constant deprecation warning
+# ("'half' is deprecated ... Use 'quantize' instead") on newer
+# torchvision/ultralytics versions, which makes the console unusable.
+# Filter it out at the source instead of relying on each script to do this.
+def _filter_ultralytics_half_deprecation(record):
+    return "'half' is deprecated" not in record.getMessage()
+
+logging.getLogger("ultralytics").addFilter(_filter_ultralytics_half_deprecation)
+
 from math import pi
 import math
 import time
@@ -5,7 +29,6 @@ from typing import Any, Callable, Optional
 import re
 from importlib import __import__, import_module, reload
 import datetime
-import os
 
 try:
     from termcolor import cprint
@@ -112,12 +135,10 @@ class StateMachineProgram(StateNode):
         self.domino_conf_threshold = float(domino_conf_threshold)
         self.robot.domino_detector = None
         self._last_image = None
-        self._normalize_axis_angle = None
 
         if self.domino:
             try:
-                from aim_fsm.domino import DominoWorldDetector, normalize_axis_angle
-                self._normalize_axis_angle = normalize_axis_angle
+                from aim_fsm.domino import DominoWorldDetector
                 current_dir = os.path.dirname(os.path.abspath(__file__))
                 parent_dir = os.path.dirname(current_dir)
                 
@@ -244,97 +265,25 @@ class StateMachineProgram(StateNode):
     def robot_put_down_default(self):
         print('Robot was put down.')
 
-    def user_image(self, image, gray): 
+    def user_image(self, image, gray):
         detector = getattr(self.robot, "domino_detector", None)
+        if image is not None:
+            # Feed the built-in world-map domino pipeline (WorldMap.update()
+            # -> make_new_domino_objects()), which already does proper
+            # candidate/association tracking, hysteresis-based confirmation,
+            # and "Domino.a"-style id assignment. We used to also register
+            # dominoes ourselves here, but that duplicated (and conflicted
+            # with) this existing system -- it was the actual source of the
+            # spurious-duplicate-domino bugs, not a fix for them.
+            self.robot.camera_image = image
         if detector is None or image is None:
             return
         self._last_image = image
-        observations = detector.detect(image, frame_id=getattr(self.robot, "frame_count", None))
-        self._update_domino_worldmap(observations)
-
-    def _update_domino_worldmap(self, observations):
-        """Persist detected dominoes into the world map every frame, the
-        same way modelling.py's update_3d_snapshot did on-demand via 'tm'."""
-        world_map = getattr(self.robot, "world_map", None)
-        normalize_axis_angle = self._normalize_axis_angle
-        if not observations or world_map is None or normalize_axis_angle is None:
-            return
-
-        for obs in observations:
-            try:
-                quad = (
-                    _np.array(obs.quad, dtype=_np.float32)
-                    if (hasattr(obs, "quad") and obs.quad is not None)
-                    else None
-                )
-                cx, cy = obs.center_xy
-
-                bottom_cy = float(_np.max(quad[:, 1])) if quad is not None else cy
-                hit, objpos = world_map.project_image_point_to_world(cx, bottom_cy)
-                if objpos is None:
-                    continue
-
-                x_mm = float(objpos[0][0])
-                y_mm = float(objpos[1][0])
-
-                local_yaw = 0.0
-                if quad is not None and len(quad) >= 2:
-                    sorted_by_y = sorted(quad, key=lambda pt: pt[1], reverse=True)
-                    p_base1, p_base2 = sorted_by_y[0], sorted_by_y[1]
-                    if p_base1[0] > p_base2[0]:
-                        p_base1, p_base2 = p_base2, p_base1
-
-                    hit1, world1 = world_map.project_image_point_to_world(p_base1[0], p_base1[1])
-                    hit2, world2 = world_map.project_image_point_to_world(p_base2[0], p_base2[1])
-
-                    if world1 is not None and world2 is not None:
-                        dx_world = float(world2[0][0] - world1[0][0])
-                        dy_world = float(world2[1][0] - world1[1][0])
-                        local_yaw = math.atan2(dy_world, dx_world)
-
-                world_yaw = normalize_axis_angle(self.robot.pose.theta + local_yaw)
-
-                face_label = obs.face_label if getattr(obs, "face_label", None) else "0-0"
-                first_half, second_half = 0, 0
-                if "-" in face_label:
-                    try:
-                        parts = face_label.split("-")
-                        first_half, second_half = int(parts[0]), int(parts[1])
-                    except ValueError:
-                        pass
-
-                halves = [
-                    {"count": first_half, "local_y": -12.0, "local_x": 0.0},
-                    {"count": second_half, "local_y": 12.0, "local_x": 0.0},
-                ]
-
-                obj_id = f"domino_{face_label}"
-
-                if obs.is_fallen:
-                    z_mm, height_3d, width_3d = 4.0, 8.0, 24.0
-                else:
-                    z_mm, height_3d, width_3d = 12.0, 24.0, 24.0
-
-                domino_obj = DominoObj(
-                    id=obj_id,
-                    x=x_mm,
-                    y=y_mm,
-                    z=z_mm,
-                    theta=world_yaw,
-                    face_label=face_label,
-                    is_fallen=obs.is_fallen,
-                )
-
-                setattr(domino_obj, "length", 48.0)
-                setattr(domino_obj, "width", width_3d)
-                setattr(domino_obj, "height", height_3d)
-                setattr(domino_obj, "thickness", 8.0)
-                setattr(domino_obj, "is_fallen", obs.is_fallen)
-                setattr(domino_obj, "domino_halves", halves)
-
-                world_map.objects[obj_id] = domino_obj
-            except Exception as e:
-                print(f"[DOMINO WORLDMAP] Error updating {getattr(obs, 'face_label', '?')}: {e}")
+        # Populate detector.latest_observations() for user_annotate()'s live
+        # overlay. make_new_domino_objects() also calls detect() with the
+        # same frame_id, but DominoWorldDetector.detect() caches by frame_id,
+        # so this doesn't cost a second inference pass.
+        detector.detect(image, frame_id=getattr(self.robot, "frame_count", None))
 
     def user_annotate(self, image):
         out = image.copy()

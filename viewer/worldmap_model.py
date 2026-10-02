@@ -64,6 +64,8 @@ class WorldMapModel(QAbstractListModel):
         "face_label",
         "domino_halves",
         "is_fallen",
+        "orientation",
+        "flipped",
     )
 
     _ROLE_MAP: RoleMap = {
@@ -144,6 +146,8 @@ class WorldMapModel(QAbstractListModel):
             "face_label": None,
             "domino_halves": [],
             "is_fallen": False,
+            "orientation": None,
+            "flipped": None,
         }
 
     def _build_object(self, object_id: str, obj: Any) -> Optional[Item]:
@@ -179,6 +183,8 @@ class WorldMapModel(QAbstractListModel):
             "face_label": getattr(obj, "face_label", None),
             "domino_halves": self._build_domino_halves(obj, length),
             "is_fallen": is_fallen,
+            "orientation": getattr(obj, "orientation", None) or ("flat" if is_fallen else "edgewise"),
+            "flipped": getattr(obj, "flipped", None),
         }
         return entry
 
