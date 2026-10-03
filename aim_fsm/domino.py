@@ -245,12 +245,13 @@ class DominoWorldDetector:
         
         try:
             res_standing = self.model_standing(image_rgb, conf=self.conf_threshold, half=use_half, verbose=False)
-        except Exception:
+        except Exception as e:
+            print("Standing domino inference failed:", repr(e))
             res_standing = None
-
         try:
             res_fallen = self.model_fallen(image_rgb, conf=self.conf_threshold, half=use_half, verbose=False)
-        except Exception:
+        except Exception as e:
+            print("Fallen domino inference failed:", repr(e))
             res_fallen = None
 
         quads_standing = self._extract_quads(res_standing, is_fallen=False)
