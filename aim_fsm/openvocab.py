@@ -130,7 +130,7 @@ def overlaps_tracked_objects(detection, boxes, limit=AIVISION_OVERLAP):
 
 class OpenVocabDetector():
     def __init__(self, robot=None, imgsz=DEFAULT_IMGSZ, conf=DEFAULT_CONF,
-                 device='cpu', recognition_model=None, verification_model=None):
+                 device=None, recognition_model=None, verification_model=None):
         self.robot = robot
         self.recognition_model = recognition_model     # None uses the conversation model
         self.verification_model = verification_model
@@ -156,12 +156,16 @@ class OpenVocabDetector():
             from ultralytics import YOLOE
             from ultralytics.nn.text_model import MobileCLIPTS
             import torch
+            if self.device is None:
+                self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
             model = YOLOE(self.model_path)
+            model.to(self.device)
             # get_text_pe() otherwise rebuilds the text encoder on every
             # set_classes(), resolving its name against the cwd.
             model.model.clip_model = MobileCLIPTS(torch.device(self.device),
                                                   weight=self.text_encoder_path)
             self.model = model
+            print(f'openvocab device: {self.device}')
             return self.model
 
     def warm_up(self, label='object'):
@@ -190,7 +194,8 @@ class OpenVocabDetector():
             bgr = np.ascontiguousarray(image[:, :, ::-1])
             results = self.model.predict(
                 bgr, conf=self.conf if conf is None else conf,
-                imgsz=self.imgsz if imgsz is None else imgsz, verbose=False)
+                imgsz=self.imgsz if imgsz is None else imgsz,
+                device=self.device, verbose=False)
         records = self._records(results[0], label, image)[:MAX_DETECTIONS]
         return records
 
