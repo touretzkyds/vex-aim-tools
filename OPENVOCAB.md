@@ -28,7 +28,7 @@ Celeste/
 Both files are required: the first contains the detector weights; the second is
 the text encoder for target phrases. The loader requires these local paths; it
 does not download missing models. Missing assets or dependencies disable openvocab with a startup diagnostic.
-Inference currently defaults to CPU.
+This fixes the CPU/GPU mismatch between the text encoder and the YOLOE model. They now both use the same device. The code uses CUDA if available; otherwise, it defaults to CPU.
 
 ## Provider and credentials
 
