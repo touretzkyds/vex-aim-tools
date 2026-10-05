@@ -3,6 +3,7 @@ import re
 import cv2
 import base64
 import openai
+from pathlib import Path
 
 
 from .events import OpenAIEvent
@@ -21,16 +22,26 @@ default_preamble = """
 class OpenAIClient():
     # DEFAULT_MODEL = 'gpt-4o'
     DEFAULT_MODEL = 'gpt-5.5'
+    IMAGE_REQUEST_TIMEOUT = 30.0  # Network timeout for openvocab image calls.
     VECTOR_STORE_EXPIRY_DAYS = 1
     MAX_SEARCH_RESULTS = 5
     def __init__(self, robot, model=DEFAULT_MODEL, use_moderation=False):
         self.robot = robot
         self.model = model
         self.use_moderation = use_moderation
+        key_file = Path(__file__).resolve().parents[1] / '.openrouter-key'
+        router_key = os.getenv('OPENROUTER_API_KEY')
+        if not router_key and key_file.is_file():
+            router_key = key_file.read_text(encoding='utf-8').strip()
+        self.use_openrouter = bool(router_key)
         env_key = os.getenv("OPENAI_API_KEY")
         if env_key:
             openai.api_key = env_key
-        if openai.api_key:  # may have been set by parent program if not by env_key
+        if router_key:
+            self.model = self.provider_model(model)
+            self.client = openai.OpenAI(api_key=router_key, base_url='https://openrouter.ai/api/v1')
+            print(f'GPT provider: OpenRouter; model: {self.model}')
+        elif openai.api_key:  # may have been set by parent program if not by env_key
             self.client = openai.OpenAI(api_key = openai.api_key)
         else:
             print("*** No OPENAI_API_KEY provided.  GPT will not be available.")
@@ -252,6 +263,28 @@ class OpenAIClient():
 
     def oneshot_query(self, query_text, image=None):
         self.robot.loop.call_soon_threadsafe(self.launch_openai_oneshot_query, query_text, image)
+
+    def provider_model(self, model):
+        """OpenRouter names OpenAI models with an 'openai/' prefix."""
+        return 'openai/' + model if self.use_openrouter and '/' not in model else model
+
+    def ask_about_image(self, query_text, image, model=None):
+        """Return an image-query response synchronously. Call from a worker thread."""
+        if self.client is None:
+            return None
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
+        swapped_colors = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        result, encimg = cv2.imencode('.jpg', swapped_colors, encode_param)
+        base64_image = base64.b64encode(encimg).decode('utf-8')
+        content = [{'type': 'input_text', 'text': query_text},
+                   {'type': 'input_image',
+                    'image_url': f'data:image/jpeg;base64,{base64_image}'}]
+        # Image failures return to the detector without automatic SDK retries.
+        response = self.client.with_options(max_retries=0, timeout=self.IMAGE_REQUEST_TIMEOUT).responses.create(
+            model = self.provider_model(model) if model else self.model,
+            input = [{'role': 'user', 'content': content}],
+        )
+        return response.output_text
 
     def launch_openai_oneshot_query(self, query_text, image=None):
         self.robot.loop.create_task(self.openai_oneshot_query(query_text, image))

@@ -10,7 +10,7 @@ from .base import StateNode
 from .utils import Pose
 from .events import DataEvent, PilotEvent
 from .pilot0 import NavPlan, NavStep, NotLocalized
-from .worldmap import WorldObject, BarrelObj, SportsBallObj, AprilTagObj, DoorwayObj, ArucoMarkerObj, RoomObj
+from .worldmap import WorldObject, BarrelObj, SportsBallObj, AprilTagObj, DoorwayObj, ArucoMarkerObj, RoomObj, OpenVocabObj
 from .rrt import RRT, RRTNode, StartCollides, GoalCollides, GoalUnreachable
 from .wavefront import WaveFront
 from .geometry import wrap_angle, segment_intersect_test
@@ -90,7 +90,9 @@ class PathPlanner():
 
         start_node = RRTNode(x=robot.pose.x, y=robot.pose.y, q=robot.pose.theta)
 
-        if isinstance(goal_object, BarrelObj):
+        if isinstance(goal_object, OpenVocabObj):
+            goal_shape = RRT.generate_openvocab_obstacle(goal_object, 0)
+        elif isinstance(goal_object, BarrelObj):
             goal_shape = RRT.generate_barrel_obstacle(goal_object, 0)
         elif isinstance(goal_object, SportsBallObj):
             goal_shape = RRT.generate_ball_obstacle(goal_object, 0)
