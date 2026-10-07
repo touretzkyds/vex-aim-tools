@@ -128,7 +128,7 @@ class ParticleViewer(QObject):
         self._view.setHeight(self._height)
         self._view.show()
         self._focus_root()
-        print(PARTICLE_HELP_TEXT, end="")
+        #print(PARTICLE_HELP_TEXT, end="")
 
     def stop(self) -> None:
         self._timer.stop()

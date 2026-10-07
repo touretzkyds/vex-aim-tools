@@ -173,7 +173,7 @@ class PathViewer(QObject):
         self._view.setHeight(self._height)
         self._view.show()
         self._focus_root()
-        print(self._help_text, end="")
+        #print(self._help_text, end="")
 
     def stop(self) -> None:
         self._timer.stop()

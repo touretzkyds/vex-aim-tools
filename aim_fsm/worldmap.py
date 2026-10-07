@@ -375,9 +375,11 @@ class WorldMap():
                 continue
             obj.sensor_distance = distance
             if isinstance(obj, AprilTagObj):
+                obj.sensor_bearing = angle
                 tag_angle_correction_factor = 4  # guesstimate
                 angle = spec['angle'] - (0 if spec['angle'] < 180 else 360)
-                theta = wrap_angle(self.robot.pose.theta + pi - angle / 180 * pi * tag_angle_correction_factor)
+                obj.sensor_orient = wrap_angle(pi - angle / 180 * pi * tag_angle_correction_factor)
+                theta = wrap_angle(self.robot.pose.theta + obj.sensor_orient)
             else:
                 theta = None
             obj.pose = Pose(x, y, 0, theta)

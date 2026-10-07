@@ -83,7 +83,7 @@ def draw_aiobj_boxes(img_rgb: _np.ndarray, items: Iterable[dict], scale: int) ->
         y1 = y + max(0, h - 1)
         if _cv2 is not None:  # pragma: no cover - exercised when OpenCV present
             try:
-                _cv2.rectangle(img_rgb, (x, y), (x1, y1), color, thickness=2, lineType=_cv2.LINE_8)
+                _cv2.rectangle(img_rgb, (x, y), (x1, y1), color, thickness=4, lineType=_cv2.LINE_8)
                 continue
             except Exception:
                 pass
@@ -106,7 +106,7 @@ def draw_tag_quads(img_rgb: _np.ndarray, items: Iterable[dict], scale: int) -> N
         color = (0, 255, 255)
         if _cv2 is not None:  # pragma: no cover - exercised when OpenCV present
             try:
-                _cv2.polylines(img_rgb, [_np.asarray(pts, dtype=_np.int32)], True, color, thickness=1, lineType=_cv2.LINE_8)
+                _cv2.polylines(img_rgb, [_np.asarray(pts, dtype=_np.int32)], True, color, thickness=2, lineType=_cv2.LINE_8)
                 continue
             except Exception:
                 pass
