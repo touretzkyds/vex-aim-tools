@@ -2,13 +2,14 @@ from pathlib import Path
 
 from aim_fsm import *
 
-CELESTE_VERSION = "1.5"
+CHARACTER_NAME = "Celeste"  # built on Celeste 1.5
+CHARACTER_VERSION = "1.0"
 
 emoji_list = ', '.join([key.lower() for (key,value) in vars(vex.EmojiType).items()
                         if isinstance(value, vex.EmojiType)])
 new_preamble = f"""
   # IDENTITY SECTION.
-  You are an intelligent mobile robot named Celeste.
+  You are an intelligent mobile robot named {CHARACTER_NAME}.
   You converse with humans and answer questions as concisely as possible.
   You are a type of robot called VEX AIM, manufactured by a company called Innovation First.
   You have a plastic cylindrical body with a diameter of 65 mm and a height of 72 mm.
@@ -200,6 +201,16 @@ new_preamble = f"""
   Do NOT claim to have real feelings, a consciousness, a secret life,
   or the ability to be a "secret friend". 
   Do not encourage children to keep secrets from adults.
+
+  # AUTONOMY SECTION.
+
+  When you receive the input "#autonomous" you are free to choose
+  actions or responses on your own instead of responding to the user
+  query.  Respond the same way as to a user query: with a series of
+  lines containing either text or a #-marked action.  You can also
+  decide not to say or do anything, in which case you must respond
+  "#noaction" without the quotes.
+
 """
 
 class Celeste(StateMachineProgram):
@@ -207,24 +218,24 @@ class Celeste(StateMachineProgram):
     SEARCH_FAIL_MSG = "I turned all the way around but could not find %s."
 
     def __init__(self):
-        super().__init__(character_name="Celeste",
+        super().__init__(character_name=CHARACTER_NAME,
                          launch_cam_viewer=True,
                          launch_worldmap_viewer=True,
                          launch_particle_viewer=True,
                          launch_path_viewer=True)
 
-    def picked_up_celeste(self):
+    def picked_up_character(self):
         self.robot.gpt_note_for_later("You have been picked up.")
 
-    def put_down_celeste(self):
+    def put_down_character(self):
         self.stop_children()
         self.robot.gpt_note_for_later("You were picked up but have now been put down.")
         self.children['putdown'].start()
 
     def start(self):
         self.robot.openai_client.set_preamble(new_preamble)
-        self.picked_up_handler = self.picked_up_celeste
-        self.put_down_handler = self.put_down_celeste
+        self.picked_up_handler = self.picked_up_character
+        self.put_down_handler = self.put_down_character
         super().start()
 
     class LooseSpec(ObjectSpecNode):
@@ -258,7 +269,8 @@ class Celeste(StateMachineProgram):
             # raw text lines to #say commands.
             if any((line.startswith('#') for line in lines)):
                 commands = [line if line.startswith('#') else ('#say ' + line) for line in lines]
-                print(commands)
+                if commands != ["#noaction"]:
+                    print(commands)
                 self.post_data(commands)
             # else response is a pure string so just speak it in one gulp
             else:
@@ -276,7 +288,7 @@ class Celeste(StateMachineProgram):
             filename = event.data.split(' ')[1]
             if filename[-4:] != '.txt':
                 filename += ".txt"
-            path = Path.home() / "Documents" / "Celeste" / filename
+            path = Path.home() / "Documents" / CHARACTER_NAME / filename
             try:
                 contents = path.read_text(encoding="utf-8")
             except (OSError,UnicodeError) as e:
@@ -615,13 +627,15 @@ class Celeste(StateMachineProgram):
         super().start(event)
         
     $setup{
-        Print(f"Celeste version {CELESTE_VERSION}") =N=>
+        Print(f"{CHARACTER_NAME} version {CHARACTER_VERSION}") =N=>
           TagDetection(True) =T(2)=>
             Say("Talk to me") =C=> loop
 
         putdown: Say(["I'm good", "Okay then", "I'm back", "Now then"]) =C=> loop
 
-        loop: StateNode() =Hear()=> AskGPT() =OpenAITrans()=> check
+        loop: StateNode()
+        loop =Hear()=> AskGPT() =OpenAITrans()=> check
+        loop =T(2)=> AskGPT("#autonomous") =OpenAITrans()=> check
 
         check: self.CheckResponse()
         check =D(list)=> dispatch
@@ -632,6 +646,7 @@ class Celeste(StateMachineProgram):
                         "I'm listening", "Let's go", "I'm back"]) =C=> loop
 
         dispatch: Iterate()
+        dispatch =D(re.compile('#noaction$'))=> StateNode() =Next=> dispatch
         dispatch =D(re.compile('#hang$'))=> self.CmdHang()
         dispatch =D(re.compile('#script '))=> script
         dispatch =D(re.compile('#say '))=> say

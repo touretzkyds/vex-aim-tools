@@ -623,6 +623,11 @@ class SLAMParticle(Particle):
     sigma_phi = 5 * (pi/180)
     sigma_theta =  5 * (pi/180)
     sigma_z = 5
+    #sigma_r = 50
+    #sigma_alpha = 15 * (pi/180)
+    #sigma_phi = 15 * (pi/180)
+    #sigma_theta =  5 * (pi/180)
+    #sigma_z = 50
     # sigma_r = 10
     # sigma_alpha = 5 * (pi/180)
     # sigma_phi = 15 * (pi/180)
