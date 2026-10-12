@@ -422,7 +422,7 @@ class Celeste(StateMachineProgram):
             below the camera's view, so a rotating sweep can never see it
             (the usual cause: a pickup attempt just nudged it).  Post
             success to trigger a back-up that restores line of sight."""
-            CLOSE_MM = 150
+            CLOSE_MM = 60 # was 150
             def start(self, event=None):
                 super().start(event)
                 try:
@@ -470,7 +470,7 @@ class Celeste(StateMachineProgram):
             nearcheck =S=> backup
             nearcheck =F=> prior
 
-            backup: Forward(-100)
+            backup: Forward(-50) # Forward(-100)
             backup =C=> prior
             backup =F=> prior
 
