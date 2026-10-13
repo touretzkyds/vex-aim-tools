@@ -786,7 +786,7 @@ class WorldMap():
     def get_prompt(self):
         with self._lock:
             prompt = ''
-            prompt += f'It is now {datetime.datetime.now().strftime("%B %d, %Y, %I:%M:%S %p")}.\n'
+            prompt += f'It is now {datetime.datetime.now().astimezone().strftime("%B %d, %Y, %I:%M:%S %p %Z")}.\n'
             if self.robot.particle_filter.state == self.robot.particle_filter.LOCALIZED:
                 prompt += f'You are located at ({round(self.robot.pose.x)}, {round(self.robot.pose.y)})\n'
                 prompt += f'Your heading is {round(self.robot.pose.theta*180/pi)} degrees\n'
