@@ -15,7 +15,7 @@ import numpy as np
 
 from .camera import AIVISION_RESOLUTION_SCALE
 from .utils import Pose
-from .openvocab_visuals import verification_candidates, verification_panels
+from .openvocab_visuals import verification_candidates, verification_panels, shape_context_photo
 from .openvocab_prompts import recognition_prompt, verification_prompt, batch_verification_prompt
 
 DEFAULT_IMGSZ = 640     # inference resolution
@@ -324,6 +324,9 @@ class OpenVocabDetector():
                     batch['base_clipped'] = box['originy'] + box['height'] >= image.shape[0] - EDGE_PX
                     batch['error'] = 'target recognized but no usable ground-contact box'
                 return
+            if verify:
+                for record in kept:
+                    record['shape_source'] = shape_context_photo(image, record)
             batch['detections'] = kept
 
         return self._submit(batch, detect)
@@ -517,6 +520,7 @@ class OpenVocabDetector():
                     raise ValueError('request was cancelled during batch verification')
                 return self._verify_candidate(image, label, [candidate], strict, context)
             record = dict(candidate, grounded=result['grounded'])
+            record['verification_description'] = str(result.get('reason', ''))[:2000]
             height, width = image.shape[:2]
             if (record['originx'] <= EDGE_PX or record['originx'] + record['width'] >= width - EDGE_PX
                     or record['originy'] + record['height'] >= height - EDGE_PX):
@@ -600,6 +604,8 @@ class OpenVocabDetector():
             # The base is the lowest bottom edge among the boxes on this object.
             best = max(numbers, key=lambda n: records[n - 1]['originy'] + records[n - 1]['height'])
             record = dict(records[best - 1], grounded=grounded)
+            record['verification_description'] = (str(obj.get('name', '')) + '. ' +
+                                                  str(result.get('reason', '')))[:2000]
             if tolerance:
                 record['base_reason'] = obj.get('base_reason', 'uncertain')
             if (record['originx'] <= EDGE_PX or record['originx'] + record['width'] >= width - EDGE_PX
