@@ -2,6 +2,7 @@
 
 These functions neither call models nor publish detections or move the robot.
 """
+import base64
 import cv2
 import numpy as np
 
@@ -9,6 +10,18 @@ DUPLICATE_IOU = 0.9             # equivalent outlines
 DUPLICATE_PX = 2                # if no edge differs by more than this
 CROP_PADDING_PX = 16            # minimum context around a verification crop
 CROP_PADDING_FRACTION = 0.25    # of the box's larger side
+
+def shape_context_photo(image, record):
+    """Keep the captured scene and numbered crop together for display generation."""
+    panels = verification_panels(image, [record])
+    scale = min(1.0, 1280 / max(panels.shape[:2]))
+    if scale < 1:
+        panels = cv2.resize(panels, (round(panels.shape[1] * scale),
+                                     round(panels.shape[0] * scale)),
+                            interpolation=cv2.INTER_AREA)
+    ok, encoded = cv2.imencode('.png', cv2.cvtColor(panels, cv2.COLOR_RGB2BGR))
+    return 'data:image/png;base64,' + base64.b64encode(encoded).decode('ascii') if ok else ''
+
 
 def verification_candidates(records):
     """Remove equivalent outlines without merging different ground-contact edges."""

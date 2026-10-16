@@ -8,6 +8,8 @@ from aim_fsm.openvocab import DETECTION_TIMEOUT, EDGE_PX, MAX_REFRAME_DEG, view_
 
 CELESTE_VERSION = "1.5"
 OPENVOCAB_MODEL = 'gpt-5.6-luna'
+OPENVOCAB_3D_ENABLED = True
+OPENVOCAB_3D_MODEL = OPENVOCAB_MODEL
 OPENVOCAB_BASE_TOLERANCE_PX = 0  # +/- pixels at 480 image height; 0 keeps strict base alignment
 OPENVOCAB_BATCH_FIRST = True  # False restores sequential candidate verification
 RECOGNITION_MODEL = OPENVOCAB_MODEL   # #find presence check
@@ -261,6 +263,12 @@ class Celeste(StateMachineProgram):
 
     def start(self):
         self.robot.openai_client.set_preamble(new_preamble)
+        from aim_fsm.openvocab_shape import ShapeGenerator
+        previous = getattr(self.robot, 'openvocab_shapes', None)
+        if previous:
+            previous.close()
+        self.robot.openvocab_shapes = (ShapeGenerator(self.robot.openai_client, OPENVOCAB_3D_MODEL)
+                                      if OPENVOCAB_3D_ENABLED else None)
         if self.robot.openvocab_detector is not None:
             self.robot.openvocab_detector.recognition_model = RECOGNITION_MODEL
             self.robot.openvocab_detector.verification_model = VERIFICATION_MODEL
@@ -269,6 +277,12 @@ class Celeste(StateMachineProgram):
         self.picked_up_handler = self.picked_up_celeste
         self.put_down_handler = self.put_down_celeste
         super().start()
+
+    def stop(self):
+        shapes = getattr(self.robot, 'openvocab_shapes', None)
+        if shapes:
+            shapes.close()
+        super().stop()
 
     class LooseSpec(ObjectSpecNode):
         """Spec lookup for names coming from GPT, so they are untrusted:

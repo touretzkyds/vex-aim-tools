@@ -112,9 +112,9 @@ class OpenVocabObj(WorldObject):
     confirmation_frames = 1        # on-demand detections cannot accumulate per-frame counts
     pending_cost_threshold = 400   # squared mm (20 mm)
     association_cost_limit = 2500  # squared mm (50 mm)
-    max_sensor_distance = 300      # mm; limits ground-projection error
+    max_sensor_distance = 500      # mm; limits ground-projection error
     duplicate_cost_limit = 500     # squared mm; secondary proximity check
-    visible_distance_threshold = 450   # includes the estimated radius beyond contact range
+    visible_distance_threshold = max_sensor_distance + 150  # includes estimated radius and margin
     min_size = 10          # mm; clamps for dimensions estimated from the box
     max_diameter = 200
     max_height = 300
@@ -345,6 +345,9 @@ class WorldMap():
             self.process_unassociated_objects()
             self.update_visibilities()
             self.update_holding()
+            shapes = getattr(self.robot, 'openvocab_shapes', None)
+            if shapes:
+                shapes.tick(self.objects)
 
     def make_new_objects_from_vision(self):
         self.candidates = list()

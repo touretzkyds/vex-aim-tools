@@ -582,20 +582,33 @@ View3D {
             position: Qt.vector3d(model.x, model.y, model.z)
             eulerRotation.z: radiansToDegrees(model.theta)
 
-            readonly property color sampledColor: model.color || "#35d07f"
-
-            Model {
-                source: "#Cylinder"
+            readonly property bool hasShape: model.shape_parts && model.shape_parts.length > 0
+            readonly property real shapeScale: Math.min(heightMm / model.shape_size[1],
+                radiusMm * 2 / Math.max(model.shape_size[0], model.shape_size[2]))
+            // Generated models use Y up; the map uses Z up. Keep navigation dimensions unchanged.
+            Node {
+                visible: openvocabRoot.hasShape
+                position.z: -openvocabRoot.heightMm / 2
                 eulerRotation.x: 90
-                scale: Qt.vector3d(parent.radiusMm / 50, parent.heightMm / 100, parent.radiusMm / 50)
-                opacity: model.missing ? 0.35 : 1.0
-                materials: PrincipledMaterial {
-                    baseColor: model.visible ? openvocabRoot.sampledColor
-                                             : Qt.darker(openvocabRoot.sampledColor, 1.7)
-                    roughness: 0.45
-                    cullMode: Material.NoCulling
-                    emissiveFactor: model.visible ? Qt.vector3d(0.05, 0.05, 0.05)
-                                                  : Qt.vector3d(0, 0, 0)
+                scale: Qt.vector3d(openvocabRoot.shapeScale, openvocabRoot.shapeScale, openvocabRoot.shapeScale)
+                Node {
+                    position: Qt.vector3d(-model.shape_center[0],
+                        -model.shape_center[1] + model.shape_size[1]/2, -model.shape_center[2])
+                    Repeater3D {
+                        model: openvocabRoot.model.shape_parts || []
+                        delegate: Model {
+                            required property var modelData
+                            source: "#" + modelData.shape.charAt(0).toUpperCase() + modelData.shape.slice(1)
+                            position: Qt.vector3d(modelData.position[0], modelData.position[1], modelData.position[2])
+                            scale: Qt.vector3d(modelData.size[0]/100, modelData.size[1]/100, modelData.size[2]/100)
+                            eulerRotation: Qt.vector3d(modelData.rotation[0], modelData.rotation[1], modelData.rotation[2])
+                            opacity: openvocabRoot.model.missing ? 0.35 : 1.0
+                            materials: PrincipledMaterial {
+                                baseColor: modelData.color
+                                roughness: 0.75
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -934,15 +947,41 @@ View3D {
     Repeater {
         model: worldModel
         delegate: Text {
-            readonly property vector3d scenePos:
-                sceneFrame.mapPositionToScene(Qt.vector3d(model.x, model.y,
-                                                          model.z + (model.height_mm || 40) / 2 + 20))
-            readonly property vector3d screenPos: worldView.mapFrom3DScene(scenePos)
+            // Anchor to the projected bounds of the displayed shape, with a pixel gap.
+            readonly property vector3d screenPos: {
+                const h = model.height_mm || 40
+                const base = (model.z || 0) - h / 2
+                const center = worldView.mapFrom3DScene(
+                    sceneFrame.mapPositionToScene(Qt.vector3d(model.x, model.y, base)))
+                if (!model.shape_parts || !model.shape_parts.length)
+                    return center
+                const size = model.shape_size
+                const scale = Math.min(h / size[1], (model.diameter_mm || 40) / Math.max(size[0], size[2]))
+                const halfX = size[0] * scale / 2
+                const halfY = size[2] * scale / 2
+                const theta = model.theta || 0
+                const c = Math.cos(theta), s = Math.sin(theta)
+                let left = Infinity, right = -Infinity, top = Infinity
+                for (const dx of [-halfX, halfX]) {
+                    for (const dy of [-halfY, halfY]) {
+                        for (const dz of [0, size[1] * scale]) {
+                            const pixel = worldView.mapFrom3DScene(sceneFrame.mapPositionToScene(
+                                Qt.vector3d(model.x + c*dx - s*dy, model.y + s*dx + c*dy, base + dz)))
+                            if (pixel.z <= 0)
+                                return center
+                            left = Math.min(left, pixel.x)
+                            right = Math.max(right, pixel.x)
+                            top = Math.min(top, pixel.y)
+                        }
+                    }
+                }
+                return Qt.vector3d((left + right) / 2, top, center.z)
+            }
 
             visible: model.type === "openvocab" && screenPos.z > 0
             text: model.label || ""
             x: screenPos.x - width / 2
-            y: screenPos.y - height
+            y: screenPos.y - height - 5
             color: model.missing ? "#c08a6a" : "#ffffff"
             font.pixelSize: 13
             font.bold: true

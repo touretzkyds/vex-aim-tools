@@ -94,4 +94,26 @@ internet access; YOLOE runs locally. There is no separate openvocab executable.
 Check the green labeled camera overlay and `openvocab map:` log messages. Test a
 mapped object again after moving/removing it to exercise arrival recovery.
 
+## 3D objects in the world map
 
+Mapped openvocab objects first appear as a name. In the background, we send the
+captured camera view and a crop of the object to the vision model. It returns
+JSON describing a shape made from boxes, spheres, cylinders, and cones. We render
+that shape, send the preview back with the original image for one revision, and
+show the result in the map. Labels sit just above the displayed shape.
+
+These shapes are approximations for display. They do not change the object's
+mapped position or the obstacle dimensions used for navigation. If the revision
+fails, we keep the first valid shape; if generation fails, the name stays visible.
+Generation runs one object at a time and normally adds two image requests per
+object. Robot commands do not wait for it.
+
+`OPENVOCAB_3D_ENABLED` in `Celeste.fsm` turns generation on or off, and
+`OPENVOCAB_3D_MODEL` selects its model. No additional packages or model downloads
+are needed. Images, responses, and shape JSON are saved under
+`snapshots/openvocab/shape-*/` for inspection.
+
+Openvocab now accepts ground-contact estimates up to 500 mm away, increased
+from 300 mm. This is still a camera-based estimate, not a depth measurement;
+position errors can increase with distance. Built-in objects keep their existing
+mapping limits and displays.

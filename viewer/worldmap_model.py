@@ -85,6 +85,9 @@ class WorldMapModel(QAbstractListModel):
         "color",
         "doorways",
         "holding",
+        "shape_parts",
+        "shape_center",
+        "shape_size",
     )
 
     _ROLE_MAP: RoleMap = {
@@ -228,6 +231,12 @@ class WorldMapModel(QAbstractListModel):
             entry["diameter_mm"] = diameter
             entry["height_mm"] = height
             entry["label"] = getattr(obj, "label", "")
+            shape = getattr(obj, "display_shape", None)
+            if getattr(obj, "display_shape_label", None) != obj.label:
+                shape = None
+            entry["shape_parts"] = shape['parts'] if shape else []
+            entry["shape_center"] = shape['center'] if shape else [0, 50, 0]
+            entry["shape_size"] = shape['size'] if shape else [100, 100, 100]
             entry["color"] = getattr(obj, "color", None) or "#35d07f"
             entry["z"] = height / 2.0
         elif type_name == "apriltag":
