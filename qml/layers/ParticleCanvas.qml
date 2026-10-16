@@ -40,7 +40,7 @@ Canvas {
 
     function pixelsPerMm() {
         if (!viewState || viewState.zoom === undefined || viewState.zoom === null)
-            return 0.4;
+            return 1.0;
         return Math.max(0.01, viewState.zoom);
     }
 
@@ -59,8 +59,8 @@ Canvas {
     function mapPoint(x, y) {
         var scale = pixelsPerMm();
         return {
-            x: (x - centerX()) * scale + width / 2,
-            y: (centerY() - y) * scale + height / 2
+            x: (centerY() - y) * scale + width / 2,
+            y: (centerX() - x) * scale + height / 2
         };
     }
 
@@ -122,7 +122,7 @@ Canvas {
             
             ctx.save();
             ctx.translate(pos.x, pos.y);
-            ctx.rotate(-entry.theta);
+            ctx.rotate(-(entry.theta + Math.PI / 2));
             ctx.beginPath();
             ctx.moveTo(size, 0);
             ctx.lineTo(-size * 0.6, size * 0.5);
@@ -143,11 +143,72 @@ Canvas {
         var minor = particleSummary.ellipseMinor * scale;
         ctx.save();
         ctx.translate(center.x, center.y);
-        ctx.rotate(-particleSummary.ellipseAngle);
+        ctx.rotate(-(particleSummary.ellipseAngle + Math.PI / 2));
         ctx.beginPath();
         ctx.ellipse(0, 0, major, minor, 0, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(120, 240, 210, 0.6)";
         ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function drawHeadingWedge(ctx) {
+        if (!particleSummary || !particleSummary.isValid)
+            return;
+        var scale = pixelsPerMm();
+        var center = mapPoint(particleSummary.poseX, particleSummary.poseY);
+        var thetaVar = Math.max(0, Number(particleSummary.thetaVariance) || 0);
+        var spanDeg = Math.max(5, Math.sqrt(thetaVar) * 360.0);
+        var halfSpan = (spanDeg * Math.PI / 180.0) * 0.5;
+        var radius = 75 * scale;
+        ctx.save();
+        ctx.translate(center.x, center.y);
+        ctx.rotate(-(particleSummary.poseTheta + Math.PI / 2));
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, radius, -halfSpan, halfSpan, false);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(60, 180, 255, 0.24)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(110, 210, 255, 0.65)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function drawLandmarkEllipse(ctx, entry, scale) {
+        var sxx = Number(entry.sigma_xx) || 0;
+        var sxy = Number(entry.sigma_xy) || 0;
+        var syy = Number(entry.sigma_yy) || 0;
+        if (sxx <= 0 && syy <= 0 && Math.abs(sxy) < 1e-6)
+            return;
+
+        var trace = sxx + syy;
+        var det = sxx * syy - sxy * sxy;
+        var radicand = Math.max(0, trace * trace * 0.25 - det);
+        var term = Math.sqrt(radicand);
+        var eig1 = Math.max(0, trace * 0.5 + term);
+        var eig2 = Math.max(0, trace * 0.5 - term);
+        if (eig1 <= 0 && eig2 <= 0)
+            return;
+
+        var major = Math.sqrt(Math.max(eig1, eig2)) * scale;
+        var minor = Math.sqrt(Math.min(eig1, eig2)) * scale;
+        if (major < 1 || minor < 1)
+            return;
+        var angle = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+        var center = mapPoint(entry.x, entry.y);
+
+        ctx.save();
+        ctx.translate(center.x, center.y);
+        ctx.rotate(-(angle + Math.PI / 2));
+        ctx.beginPath();
+        ctx.ellipse(0, 0, major, minor, 0, 0, Math.PI * 2);
+        if (entry.kind === "wall")
+            ctx.strokeStyle = "rgba(170, 150, 255, 0.85)";
+        else
+            ctx.strokeStyle = "rgba(255, 150, 200, 0.85)";
+        ctx.lineWidth = 1.5;
         ctx.stroke();
         ctx.restore();
     }
@@ -164,7 +225,7 @@ Canvas {
         
         ctx.save();
         ctx.translate(pos.x, pos.y);
-        ctx.rotate(-particleSummary.poseTheta);
+        ctx.rotate(-(particleSummary.poseTheta + Math.PI / 2));
         ctx.translate(tipOffset, 0);  // Apply tip offset
         
         ctx.beginPath();
@@ -192,20 +253,40 @@ Canvas {
             var pos = mapPoint(entry.x, entry.y);
             ctx.save();
             ctx.translate(pos.x, pos.y);
-            ctx.rotate(-entry.theta);
+            ctx.rotate(-(entry.theta + Math.PI / 2));
             if (entry.kind === "wall") {
-                var halfLength = (entry.length_mm || 100) * 0.5 * scale;
-                var halfWidth = Math.max(10 * scale, (entry.width_mm || 50) * 0.5 * scale);
-                ctx.strokeStyle = entry.seen ? "rgba(255, 140, 90, 0.9)" : "rgba(120, 80, 60, 0.5)";
-                ctx.lineWidth = 2;
-                ctx.strokeRect(-halfLength, -halfWidth / 4, halfLength * 2, halfWidth / 2);
+                var wallLength = Math.max(20, Number(entry.length_mm) || 100) * scale;
+                var wallThickness = Math.max(3, 20 * scale);
+                ctx.strokeStyle = entry.seen ? "rgba(255, 170, 90, 0.98)" : "rgba(175, 120, 60, 0.9)";
+                ctx.lineWidth = Math.max(2.5, 2.0 * scale);
+                ctx.strokeRect(-wallThickness / 2, -wallLength / 2, wallThickness, wallLength);
+
+                ctx.save();
+                ctx.rotate(entry.theta + Math.PI / 2);
+                ctx.fillStyle = entry.seen ? "rgba(255, 226, 160, 0.98)" : "rgba(215, 186, 132, 0.85)";
+                ctx.font = Math.max(10, 13 * scale) + "px sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(String(entry.label || entry.id), 0, -wallLength * 0.56);
+                ctx.restore();
             } else {
                 var size = 20 * scale;
                 ctx.strokeStyle = entry.seen ? "rgba(130, 255, 120, 0.9)" : "rgba(90, 150, 90, 0.6)";
                 ctx.lineWidth = 2;
                 ctx.strokeRect(-size / 2, -size / 2, size, size);
+                if (entry.kind === "aruco" && entry.marker_id !== null && entry.marker_id !== undefined) {
+                    ctx.save();
+                    ctx.rotate(entry.theta + Math.PI / 2);
+                    ctx.fillStyle = entry.seen ? "rgba(255, 255, 255, 0.95)" : "rgba(200, 200, 200, 0.7)";
+                    ctx.font = Math.max(10, 14 * scale) + "px sans-serif";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(String(entry.marker_id), 0, size * 0.08);
+                    ctx.restore();
+                }
             }
             ctx.restore();
+            drawLandmarkEllipse(ctx, entry, scale);
         }
     }
 
@@ -216,9 +297,10 @@ Canvas {
         ctx.fillRect(0, 0, width, height);
 
         drawGrid(ctx);
+        drawParticles(ctx);
+        drawSummary(ctx);
+        drawHeadingWedge(ctx);
+        drawRobot(ctx);
         drawLandmarks(ctx);
-        drawParticles(ctx);    // Draw particles first (red, small)
-        drawSummary(ctx);      // Draw error ellipse (cyan)
-        drawRobot(ctx);        // Draw robot on top (yellow, large)
     }
 }

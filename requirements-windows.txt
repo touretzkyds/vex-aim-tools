@@ -8,10 +8,12 @@ websocket_client
 flask
 flask_cors
 pyreadline3
-openai
+openai>=3.8.0
+playsound3
 gTTS
 google-cloud-texttospeech
 matplotlib
 PyYAML
 torch
 torchvision
+elevenlabs

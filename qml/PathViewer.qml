@@ -47,6 +47,8 @@ FocusScope {
             implicitWidth: 280
             source: viewerApp ? viewerApp.wavefrontSource : ""
             squareSizeMm: viewerApp ? viewerApp.wavefrontSquareSize : 5.0
+            originX: viewerApp ? viewerApp.wavefrontOriginX : 0.0
+            originY: viewerApp ? viewerApp.wavefrontOriginY : 0.0
             viewState: root.viewStateRef
         }
     }
@@ -129,7 +131,7 @@ FocusScope {
         var scale = root.viewStateRef.zoom || 0.64;
         var deltaX = dx / scale;
         var deltaY = dy / scale;
-        root.viewStateRef.setCenter(root.viewStateRef.centerX + deltaX, root.viewStateRef.centerY + deltaY);
+        root.viewStateRef.setCenter(root.viewStateRef.centerX + deltaY, root.viewStateRef.centerY - deltaX);
     }
 
     function adjustZoom(factor) {

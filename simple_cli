@@ -16,6 +16,7 @@ import logging
 import os
 import platform
 import re
+import signal
 import readline
 import rlcompleter
 import subprocess
@@ -43,11 +44,24 @@ except:
 import aim_fsm
 from aim_fsm import *
 from aim_fsm.program import runfsm as _program_runfsm
+from viewer.lifecycle import ensure_viewer as _ensure_viewer_for_target
+
+try:
+    from viewer.imshow_manager import imshow_pump
+except Exception:
+    imshow_pump = None
 
 ################ Configuration
 
 # tab completion
-readline.parse_and_bind('tab: complete')
+if 'libedit' in readline.__doc__:    # Macs might not use GNU readline
+    # Use libedit-specific binding for tab
+    readline.parse_and_bind("bind ^I rl_complete")
+else:
+    readline.parse_and_bind('tab: complete')
+
+# Qt event processing flag (set by SIGALRM handler)
+_qt_needs_processing = False
 
 # history file
 if 'HOME' in os.environ:  # Linux
@@ -70,34 +84,37 @@ os_version = platform.system()
 if '.' not in sys.path:
     sys.path.append('.')
 
+
+def _qt_event_handler(signum, frame):
+    """Signal handler - only set flag, never call Qt here."""
+    global _qt_needs_processing
+    _qt_needs_processing = True
+
+
+if hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer"):
+    try:
+        signal.signal(signal.SIGALRM, _qt_event_handler)
+        signal.setitimer(signal.ITIMER_REAL, 0.05, 0.05)
+    except ValueError:
+        # Signals only work in the main thread; ignore if not available.
+        pass
+
 ################ CLI functions
 
 ans = None
 RUNNING = True
 _qt_busy = False
 
-
 def runfsm(module_name):
     new_fsm = _program_runfsm(module_name)
-    globals()['running_fsm'] = aim_fsm.program.running_fsm
+    globals()['running_fsm'] = aim_fsm.speech_rec.running_fsm = aim_fsm.program.running_fsm
     _process_pending_viewer_launches(timeout=0.1)
     return new_fsm
 
 
 def _ensure_viewer(attr, factory):
     target = globals().get('robot')
-    if target is None:
-        return None
-
-    viewer = getattr(target, attr, None)
-    if viewer and viewer is not True:
-        return viewer
-
-    viewer = factory()
-    if hasattr(viewer, 'start'):
-        viewer.start()
-    setattr(target, attr, viewer)
-    return viewer
+    return _ensure_viewer_for_target(target, attr, factory)
 
 
 def _prime_default_viewers(program, launch_overrides=None):
@@ -113,16 +130,19 @@ def _prime_default_viewers(program, launch_overrides=None):
         # Enable cliff overlay in cached mode (reads from robot.cliff_results, no detector)
         from viewer.cliff_overlay import CliffOverlay
         cliff_overlay = CliffOverlay(detector=None, robot=target_robot)
-        _ensure_viewer('cam_viewer', lambda: CamViewer(target_robot, cliff_overlay=cliff_overlay))
+        _ensure_viewer_for_target(
+            target_robot, 'cam_viewer',
+            lambda: CamViewer(target_robot, cliff_overlay=cliff_overlay),
+        )
 
     if flags.get('worldmap', getattr(program, 'launch_worldmap_viewer', False)):
-        _ensure_viewer('worldmap_viewer', lambda: WorldMapViewer(target_robot))
+        _ensure_viewer_for_target(target_robot, 'worldmap_viewer', lambda: WorldMapViewer(target_robot))
 
     if flags.get('particle', getattr(program, 'launch_particle_viewer', False)):
-        _ensure_viewer('particle_viewer', lambda: ParticleViewer(target_robot))
+        _ensure_viewer_for_target(target_robot, 'particle_viewer', lambda: ParticleViewer(target_robot))
 
     if flags.get('path', getattr(program, 'launch_path_viewer', False)):
-        _ensure_viewer('path_viewer', lambda: PathViewer(target_robot))
+        _ensure_viewer_for_target(target_robot, 'path_viewer', lambda: PathViewer(target_robot))
 
 
 _pending_viewer_launches = SimpleQueue()
@@ -171,6 +191,8 @@ def _drain_pending_viewer_launches_once():
             break
         _prime_default_viewers(program, launch_flags)
         processed = True
+    if imshow_pump is not None:
+        processed = imshow_pump() or processed
     return processed
 
 
@@ -199,9 +221,28 @@ def _process_pending_viewer_launches(timeout=0.0):
 
         time.sleep(min(0.01, remaining))
 
+def _process_qt_events_if_needed():
+    global _qt_needs_processing
+    if not _qt_needs_processing:
+        return
+    _qt_needs_processing = False
+    try:
+        from PyQt6.QtGui import QGuiApplication
+    except ImportError:
+        return
+    app = QGuiApplication.instance()
+    if app:
+        app.processEvents()
+
+
+def _flush_main_thread_gui(timeout=0.15):
+    _process_qt_events_if_needed()
+    _process_pending_viewer_launches(timeout=timeout)
+    _process_qt_events_if_needed()
+
 def cli_loop(_robot):
     global ans, RUNNING, robot, file_to_run, running_fsm
-
+    RUNNING = True
     robot = _robot
 
     cli_globals = globals()
@@ -212,9 +253,11 @@ def cli_loop(_robot):
     if file_to_run:
         time.sleep(0.25)
         running_fsm = runfsm(file_to_run)
+        aim_fsm.speech_rec.running_fsm = running_fsm
         cli_globals['running_fsm'] = running_fsm
     else:
         running_fsm = aim_fsm.program.running_fsm = StateMachineProgram()
+        aim_fsm.speech_rec.running_fsm = running_fsm
         cli_globals['running_fsm'] = running_fsm
         robot.loop.call_soon_threadsafe(running_fsm.start)
 
@@ -226,6 +269,8 @@ def cli_loop(_robot):
         cli_loop._line = ''
         while cli_loop._line == '':
             running_fsm = aim_fsm.program.running_fsm
+            aim_fsm.speech_rec.running_fsm = running_fsm
+            _process_qt_events_if_needed()
             _process_pending_viewer_launches()
             readline.write_history_file(histfile)
 
@@ -260,9 +305,14 @@ def cli_loop(_robot):
             continue
         elif cli_loop._line[0:2] == '. ':
             do_hear_command(cli_loop._line[2:])
+            _flush_main_thread_gui()
+            continue
+        elif cli_loop._line[0:2] == '.?':
+            show_messages(cli_loop._line)
             continue
         elif cli_loop._line[0:3] == 'tm ' or cli_loop._line == 'tm':
             text_message(cli_loop._line[3:])
+            _flush_main_thread_gui()
             continue
         elif cli_loop._line[0:5] == 'show ' or cli_loop._line == 'show':
             show_args = cli_loop._line[5:].split(' ')
@@ -272,6 +322,17 @@ def cli_loop(_robot):
                 traceback.print_exc()
                 print()
             continue
+        elif cli_loop._line[0:8] == 'restart ' or  cli_loop._line == 'restart':
+            restart_stuff(cli_loop._line[8:])
+            continue
+        elif cli_loop._line == '/oa':
+            cli_loop._line = "oa = robot.world_map.objects['OrangeBarrel.a']"
+        elif cli_loop._line == '/ob':
+            cli_loop._line = "ob = robot.world_map.objects['OrangeBarrel.b']"
+        elif cli_loop._line == '/ba':
+            cli_loop._line = "ba = robot.world_map.objects['BlueBarrel.a']"
+        elif cli_loop._line == '/bb':
+            cli_loop._line = "bb = robot.world_map.objects['BlueBarrel.b']"
         elif cli_loop._line[0:7] == 'reload ':
             do_reload(cli_loop._line[7:])
             continue
@@ -318,7 +379,7 @@ def cli_loop(_robot):
             if running_fsm:
                 running_fsm.stop()
             print('exiting...')
-            RUNNING=False
+            RUNNING = False
             continue
         else:
             cli_loop._line = 'ans=' + cli_loop._line
@@ -385,7 +446,9 @@ def show_stuff(args):
         cliff_overlay = CliffOverlay(detector=None, robot=robot)
         _ensure_viewer('cam_viewer', lambda: CamViewer(robot, cliff_overlay=cliff_overlay))
     elif spec == "crosshairs":
-        robot.cam_viewer.crosshairs = not robot.cam_viewer.crosshairs
+        viewer = _ensure_viewer('cam_viewer', lambda: CamViewer(robot))
+        if viewer is not None:
+            viewer.crosshairs = not viewer.crosshairs
     elif spec == "particle_viewer":
         _ensure_viewer('particle_viewer', lambda: ParticleViewer(robot))
     elif spec == "path_viewer":
@@ -430,6 +493,7 @@ def show_stuff(args):
   show worldmap_viewer             Open PyQt6 world map viewer
   show path_viewer                 Open PyQt6 path/wavefront viewer
   show depth_viewer                Open PyQt6 depth/gradient viewer
+  restart img_thread               Restart the image thread to unfreeze camera
    """)
 
 
@@ -506,6 +570,28 @@ def show_kine_joint(name):
     tprint(robot.kine.link_to_base(name))
     print()
 
+def show_messages(line):
+    # line begins with '.?'
+    index = None
+    m = re.match(r'^\.\?+$', line)
+    if m is not None:
+        index = - (m.span()[1] - 1)
+    else:
+        try:
+            index = int(line[2:])
+        except:
+            pass
+    if index is not None:
+        try:
+            abs_index = index if index >= 0 else index + len(robot.openai_client.messages)
+            print(f'messages[{abs_index}] =', robot.openai_client.messages[index])
+            print()
+        except:
+            print(f'Invalid index: {index}.')
+    else:
+        print('Invalid syntax:  use .??? or .?[-3]')
+
+
 """
 def show_landmarks():
     landmarks = robot.world.particle_filter.sensor_model.landmarks
@@ -543,6 +629,14 @@ def show_landmarks_helper(landmarks):
               (x, y, theta, sigma_x, sigma_y, sigma_theta))
     print()
 """
+
+def restart_stuff(args):
+    arg = args.strip()
+    if arg == 'img_thread':
+        robot.restart_img_thread()
+    else:
+        print('Usage:   restart img_thread')
+
 
 def start_stuff(args):
     print('not yet implemented')
@@ -921,14 +1015,14 @@ loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 # loop.set_debug(True)
 
-def loopthread():
+def loop_runner():
     global loop
     #print(f"loop thead in {threading.current_thread().native_id}")
     loop.run_forever()
 
-th = threading.Thread(target=loopthread)
-th.daemon = True
-th.start()
+loop_thread = threading.Thread(target=loop_runner)
+loop_thread.daemon = True
+loop_thread.start()
 
 # Set up periodic Qt event processing (for viewers)
 def _qt_event_handler(signum, frame):
@@ -950,13 +1044,18 @@ launch_speech_listener = 'ROBOT_NO_SPEECH' not in os.environ
 
 robot = Robot(loop=loop, host=robot_address,
               launch_speech_listener=launch_speech_listener)
+robot.speech_listener.set_confirmation(True) # play confirmation bell
 evbase.robot_for_loading = robot
-
-# Need this for circularity between Pilot and DoorPass
-pilot.pilot_global_doorpass_node = pilot.DoorPass()
-
 
 ################ Launch
 
-file_to_run = sys.argv[1] if len(sys.argv) > 1 else None
+if len(sys.argv) > 1:
+    file_to_run = sys.argv[1]
+    if file_to_run[-4:] == '.fsm':
+        file_to_run = file_to_run[:-4]
+    elif file_to_run[-3:] == '.py':
+        file_to_run = file_to_run[:-3]
+else:
+    file_to_run = None
+
 cli_loop(robot)

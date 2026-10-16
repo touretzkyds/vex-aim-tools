@@ -65,6 +65,10 @@ FocusScope {
             if (viewerApp && typeof viewerApp.turnDegrees === "function")
                 viewerApp.turnDegrees(angleDeg)
         }
+        onDrop: {
+            if (viewerApp && typeof viewerApp.drop === "function")
+                viewerApp.drop()
+        }        
         onEvaluateParticles: {
             if (viewerApp && typeof viewerApp.evaluateParticles === "function")
                 viewerApp.evaluateParticles()
@@ -183,10 +187,10 @@ FocusScope {
     function adjustCenter(dx, dy) {
         if (!root.viewStateRef || !root.viewStateRef.setCenter)
             return;
-        var scale = root.viewStateRef.zoom || 0.4;
+        var scale = root.viewStateRef.zoom || 1.0;
         var deltaX = dx / scale;
         var deltaY = dy / scale;
-        root.viewStateRef.setCenter(root.viewStateRef.centerX + deltaX, root.viewStateRef.centerY + deltaY);
+        root.viewStateRef.setCenter(root.viewStateRef.centerX + deltaY, root.viewStateRef.centerY - deltaX);
     }
 
     function adjustZoom(factor) {

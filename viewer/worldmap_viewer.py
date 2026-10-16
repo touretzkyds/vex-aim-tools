@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -13,6 +14,7 @@ from PyQt6.QtQuick import QQuickImageProvider, QQuickView
 from aim_fsm.camera import AIVISION_RESOLUTION_SCALE  # legacy code expects this in scope
 
 from .help_texts import WORLD_HELP_TEXT
+from .lifecycle import stop_timer_if_view_hidden
 from .worldmap_model import WorldMapModel
 from .grid_provider import OccupancyGridProvider
 
@@ -32,45 +34,63 @@ class TagTextureProvider(QQuickImageProvider):
         """Generate or retrieve cached texture for the given tag ID.
         
         Args:
-            id: The tag ID string (e.g., "5", "42")
+            id: The tag ID string (e.g., "5", "42", "aruco-5")
             requestedSize: Requested size (QSize)
             
         Returns:
             Tuple of (QImage, QSize)
         """
         result_size = QSize(self._texture_width, self._texture_height)
+        cache_key = id or ""
 
-        if not id or id == "null" or id == "None":
+        if not cache_key or cache_key == "null" or cache_key == "None":
             # Return transparent image for missing IDs
             img = QImage(self._texture_width, self._texture_height, QImage.Format.Format_RGBA8888)
             img.fill(QColor(0, 0, 0, 0))
             return img, result_size
 
         # Check cache
-        if id in self._cache:
-            return self._cache[id], result_size
+        if cache_key in self._cache:
+            return self._cache[cache_key], result_size
+
+        texture_id = cache_key
+        reverse_text = False
+        if texture_id.startswith("back-"):
+            reverse_text = True
+            texture_id = texture_id[len("back-") :]
+
+        label = texture_id
+        background = QColor(128, 76, 230, 255)  # Purple background matching AprilTag color
+        text_color = QColor(255, 255, 255, 255)
+        if texture_id.startswith("aruco-"):
+            label = texture_id.split("-", 1)[1]
+            background = QColor(0, 255, 0, 255)  # Bright green for ArUco
+            text_color = QColor(0, 0, 0, 255)
 
         # Generate new texture with correct aspect ratio
         img = QImage(self._texture_width, self._texture_height, QImage.Format.Format_RGBA8888)
-        img.fill(QColor(128, 76, 230, 255))  # Purple background matching AprilTag color
+        img.fill(background)
 
         painter = QPainter(img)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        # White text, bold font
-        painter.setPen(QColor(255, 255, 255, 255))
+        # Bold font
+        painter.setPen(text_color)
         font = QFont("Arial", 72, QFont.Weight.Bold)
         painter.setFont(font)
 
         # Center the text
         rect = img.rect()
-        painter.drawText(rect, 0x84, id)  # 0x84 = AlignCenter | AlignVCenter
+        painter.drawText(rect, 0x84, label)  # 0x84 = AlignCenter | AlignVCenter
 
         painter.end()
 
+        if reverse_text:
+            img = img.mirrored(True, False)
+
         # Cache the result
-        self._cache[id] = img
+        self._cache[cache_key] = img
         return img, result_size
 
 
@@ -102,6 +122,7 @@ class WorldMapViewer(QObject):
         self._width = int(width)
         self._height = int(height)
         self._window_name = windowName
+        self._last_refresh_error_ts = 0.0
 
         self._app = QGuiApplication.instance() or QGuiApplication([])
         self._model = WorldMapModel()
@@ -139,6 +160,7 @@ class WorldMapViewer(QObject):
         self._view = QQuickView()
         self._view.setTitle(self._window_name)
         self._view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        self._bind_visibility_handler()
 
         print("[WorldMapViewer] Initializing QML context...")
         self._context = self._initialise_qml_context()
@@ -161,27 +183,29 @@ class WorldMapViewer(QObject):
         print("[WorldMapViewer] View shown")
         self._focus_root()
         self.frame_scene()
-        print(WORLD_HELP_TEXT, end="")
-        print("[WorldMapViewer] start() DONE")
+        #print(WORLD_HELP_TEXT, end="")
 
     def stop(self) -> None:
         self._timer.stop()
         self._view.close()
 
-    def refresh(self) -> None:
-        try:
-            update = getattr(self._worldmap, "update", None)
-            if callable(update):
-                update()
-        except Exception:
-            pass
+    def is_visible(self) -> bool:
+        return self._view.isVisible()
 
-        # Dynamically ensure grid provider follows the current grid instance
-        if self._worldmap and hasattr(self._worldmap, 'occupancy_grid'):
+    def refresh(self) -> None:
+        snapshot = getattr(self._worldmap, "snapshot_objects", None)
+        try:
+            if callable(snapshot):
+                objects = snapshot() or {}
+            else:
+                objects = dict(getattr(self._worldmap, "objects", {}) or {})
+        except Exception as exc:
+            self._log_refresh_error(exc)
+            objects = {}
+
+        if self._worldmap and hasattr(self._worldmap, "occupancy_grid"):
             self._grid_provider.set_grid(self._worldmap.occupancy_grid)
 
-        # Always use worldmap.objects (shared_map is Cozmo holdover code, not implemented for VEX AIM)
-        objects = getattr(self._worldmap, "objects", {}) or {}
         self._model.sync_from(self._robot, objects)
 
     def grab_window(self) -> QImage:
@@ -285,6 +309,16 @@ class WorldMapViewer(QObject):
         print("[WorldMapViewer] _initialise_qml_context DONE")
         return context
 
+    def _bind_visibility_handler(self) -> None:
+        signal = getattr(self._view, "visibleChanged", None)
+        if signal is None:
+            signal = getattr(self._view, "visibilityChanged", None)
+        if signal is not None:
+            signal.connect(self._handle_visibility_changed)
+
+    def _handle_visibility_changed(self, *args) -> None:
+        stop_timer_if_view_hidden(self._view, self._timer)
+
     def _focus_root(self) -> None:
         try:
             root = self._view.rootObject()
@@ -292,6 +326,12 @@ class WorldMapViewer(QObject):
             return
         if root is not None and hasattr(root, "forceActiveFocus"):
             root.forceActiveFocus()
+
+    def _log_refresh_error(self, exc: Exception) -> None:
+        now = time.monotonic()
+        if now - self._last_refresh_error_ts >= 1.0:
+            print(f"[WorldMapViewer] refresh failed: {exc}")
+            self._last_refresh_error_ts = now
 
 
 __all__ = ["WorldMapViewer"]

@@ -9,18 +9,22 @@ from .rrt_shapes import *
 
 camera_tilt = 18 # degrees downward (design spec)
 camera_tilt = 25 # degrees downward (estimated)
-camera_tilt = 19.2 # degrees downward (measured for AIM-5A888218)
+camera_tilt = 24
+camera_tilt = 25.4 # degrees downward (measured for AIM-5A888218)
+camera_tilt = 23.7 # degrees downward (measured for AIM-32A57C18)
 
 # Camera tilt Measurement procedure:
 #  1. Abut ruler to front edge of robot; align edge of ruler with vertical crosshair.
 #  2. Measure distance d to horizontal crosshair; measure on the ruler surface, not on the table.
-#  3. Calculate camera_tilt = atan2(43.47, d + 30) * 180/pi
+#  3. Calculate camera_tilt = atan2(43.47, d + 3) * 180/pi
 
 
 # ================================================================
 
 class AIMKinematics(Kinematics):
-    body_diameter = 57 # mm
+    body_diameter = 60 # mm
+    wheel_diameter = 24 # mm
+    wheel_distance = 25 # mm from center
     robot_height = 72 # mm
     kicker_extension = 15 # mm
 
@@ -70,7 +74,50 @@ class AIMKinematics(Kinematics):
                              description = 'Camera frame: x right, y down, z depth',
                              d = r2-r1)
 
-        joints = [base_frame, world_frame, kicker_frame, camera_dummy, camera_frame]
+        # display frame
+        display_frame = Joint('display_frame', parent=base_frame,
+                              description = 'LED display; x is down, y is right',
+                              d = self.robot_height,
+                              theta = pi)
+
+
+        # wheel frames
+        left_dummy = Joint('left_dummy', parent=base_frame,
+                           description = 'Dummy joint for left wheel',
+                           d = self.wheel_diameter/2, # axle height in mm
+                           theta = -30 * pi/180,
+                           alpha = -pi/2)
+
+        left_wheel_frame = Joint('left_wheel', parent=left_dummy,
+                                 description = 'Left wheel axle; y is up',
+                                 d = self.wheel_distance,
+                                 theta = pi)
+
+        right_dummy = Joint('left_dummy', parent=base_frame,
+                            description = 'Dummy joint for right wheel',
+                            d = self.wheel_diameter/2, # axle height in mm
+                            theta = 30 * pi/180,
+                            alpha = pi/2)
+
+        right_wheel_frame = Joint('right_wheel', parent=right_dummy,
+                                  description = 'Right wheel axle; y is up',
+                                  d = self.wheel_distance,
+                                  theta = pi)
+
+        rear_dummy = Joint('rear_dummy', parent=base_frame,
+                            description = 'Dummy joint for rear wheel',
+                            d = self.wheel_diameter/2, # axle height in mm
+                            theta = -pi/2,
+                            alpha = pi/2)
+
+        rear_wheel_frame = Joint('rear_wheel', parent=rear_dummy,
+                                 description = 'Rear wheel axle; y is up',
+                                 d = self.wheel_distance)
+
+
+        joints = [base_frame, world_frame, kicker_frame, camera_dummy, camera_frame,
+                  display_frame, left_dummy, left_wheel_frame, right_dummy, right_wheel_frame,
+                  rear_dummy, rear_wheel_frame]
 
         super().__init__(joints,robot)
 

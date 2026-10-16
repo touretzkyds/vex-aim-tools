@@ -88,10 +88,10 @@ class NavStep():
         if self.type == NavStep.DOORPASS:
             pstring = self.param.id
         elif self.type == NavStep.DRIVE:
-            psteps = [(round(node.x,1),round(node.y,1)) for node in self.param]
-            pstring = repr(psteps)
+            psteps = [f'({node.x:.1f}, {node.y:.1f})' for node in self.param]
+            pstring = '[' + ' '.join(psteps) + ']'
         elif self.type == NavStep.TURN_TO:
-            pstring = f'{neaten(self.param * 180/pi)} deg.'
+            pstring = f'{self.param * 180/pi:.1f} deg.'
         else:   # NavStep.BACKUP and anything else
             pstring = repr(self.param)
             if len(pstring) > 40:

@@ -1,6 +1,9 @@
 import math
+import copy
 import numpy as np
 import datetime
+import threading
+import time
 import cv2
 from .geometry import *
 from .utils import *
@@ -13,31 +16,27 @@ except ImportError:
     OccupancyGrid = None
 
 class WorldObject():
-    def __init__(self, id=None, name=None, x=0, y=0, z=0, theta=None, is_visible=False):
+    def __init__(self, id=None, name=None, x=0, y=0, z=0, theta=None, is_visible=False, is_fixed=False):
         self.id = id
-        self.pose = Pose(x, y, z, theta)
+        self.pose = PoseEstimate(x, y, z, theta)
         self.name = name or self.__class__.__name__
         self.matched = None  # matching object from data association
-        self.is_fixed = False   # True for walls and markers in predefined maps
-        self.is_obstacle = True
+        self.is_fixed = is_fixed   # True for walls and markers in predefined maps
+        self.is_obstacle = True # for path planning
         self.is_visible = is_visible
-        self.is_missing = False
+        self.is_missing = False # expect to see it but we don't
         self.is_valid = True
         self.held_by = None
-        self.is_foreign = False
+        self.is_foreign = False # for shared maps; unused for now
         if is_visible:
             self.pose_confidence = +1
         else:
             self.pose_confidence = -1
 
     def __repr__(self):
-        if self.is_visible:
-            vis = "visible"
-        elif self.is_missing:
-            vis = "missing"
-        else:
-            vis = "unseen"
-        return f'<{self.id or self.name} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f})>'
+        vis = 'visible' if self.is_visible else 'missing' if self.is_missing else 'unseen'
+        held = " held" if self.held_by else ""
+        return f'<{self.id or self.name} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f}){held}>'
 
     def update_matched_object(self,robot):
         "Update the matched world_map object with info from this candidate."
@@ -46,7 +45,8 @@ class WorldObject():
             return
         MIN_MEASUREMENT_NOISE = 5
         measurement_noise = max(MIN_MEASUREMENT_NOISE, math.sqrt(self.sensor_distance)/2)
-        self.matched.pose.update(self.pose, measurement_noise)
+        if self.matched is not robot.holding:  # pose update will be done by update_held_object()
+            self.matched.pose.update(self.pose, measurement_noise)
         if hasattr(self, 'spec'):
             self.matched.spec = self.spec
         if hasattr(self, 'marker'):
@@ -63,12 +63,14 @@ class WorldObject():
             self.matched.wall = self.wall.matched
 
 class BarrelObj(WorldObject):
-    def __init__(self, spec):
-        super().__init__()
+    def __init__(self, spec=None, id=None, x=0, y=0):
+        if id is None and spec and 'id' in spec and isinstance(spec['id'], str):
+            id = spec['id']
+        super().__init__(id=id, x=x, y=y)
         self.spec = spec
         self.name = spec['name']
         self.diameter = 22 # mm
-        self.height = 25
+        self.height = 25 # mm
 
 class OrangeBarrelObj(BarrelObj):
     pass
@@ -77,22 +79,26 @@ class BlueBarrelObj(BarrelObj):
     pass
 
 class SportsBallObj(WorldObject):
-    def __init__(self, spec):
-        super().__init__()
+    def __init__(self, spec=None, id=None, x=0, y=0):
+        if id is None and spec and 'id' in spec and isinstance(spec['id'], str):
+            id = spec['id']
+        super().__init__(id=id, x=x, y=y)
         self.spec = spec
         self.name = spec['name']
         self.diameter = 25.0 # mm
         self.z = self.diameter / 2
 
 class RobotObj(WorldObject):
-    def __init__(self, spec):
-        super().__init__()
+    def __init__(self, spec=None, id=None, x=0, y=0, theta=0):
+        super().__init__(id=id, x=x, y=y, theta=theta)
         self.spec = spec
         self.name = spec['name']
 
 class AprilTagObj(WorldObject):
-    def __init__(self, spec):
-        super().__init__()
+    def __init__(self, spec=None, id=None, x=0, y=0, theta=0):
+        if id is None and spec and 'id' in spec:
+            id = spec['id']
+        super().__init__(id=id, x=x, y=y, theta=theta)
         self.spec = spec
         self.name = spec['name']
         self.tag_id = spec['id']
@@ -100,26 +106,42 @@ class AprilTagObj(WorldObject):
         self.width = 38 # mm
 
     def __repr__(self):
-        vis = "visible" if self.is_visible else "unseen"
+        vis = 'visible' if self.is_visible else 'missing' if self.is_missing else 'unseen'
         return f'<{self.id or self.name} {vis} at ({self.pose.x:.1f}, {self.pose.y:.1f}) @ {self.pose.theta*180/pi:.1f} deg.>'
     
 
+class AprilTag0Obj(AprilTagObj):
+    pass
+
+class AprilTag1Obj(AprilTagObj):
+    pass
+
+class AprilTag2Obj(AprilTagObj):
+    pass
+
+class AprilTag3Obj(AprilTagObj):
+    pass
+
+class AprilTag4Obj(AprilTagObj):
+    pass
+
 class ArucoMarkerObj(WorldObject):
-    def __init__(self, spec, x=0, y=0, z=0, theta=0):
-        super().__init__(id=spec.get('id'), name=spec.get('name'), x=x, y=y, z=z, theta=theta)
+    def __init__(self, spec, x=0, y=0, z=0, theta=0, **kwargs):
+        super().__init__(x=x, y=y, z=z, theta=theta, **kwargs)
         self.name = spec['name']
-        self.marker_id = spec['id']
         self.marker = spec['marker']
+        self.marker_id = spec['id']
+        self.marker_string = 'ArucoMarker-' + str(spec['id'])
         self.pose_confidence = +1
 
     def __repr__(self):
         if self.pose_confidence >= 0:
-            vis = ' visible' if self.is_visible else ''
+            vis = 'visible' if self.is_visible else 'missing' if self.is_missing else 'unseen'
             fix = ' fixed' if self.is_fixed else ''
-            return '<ArucoMarkerObj %s: (%.1f, %.1f, %.1f) @ %d deg.%s%s>' % \
-                (self.id, self.pose.x, self.pose.y, self.pose.z, self.pose.theta*180/pi, fix, vis)
+            return '<ArucoMarkerObj %s: (%.1f, %.1f, %.1f) @ %d deg.%s %s>' % \
+                (self.marker_id, self.pose.x, self.pose.y, self.pose.z, self.pose.theta*180/pi, fix, vis)
         else:
-            return f'<ArucoMarkerObj {self.id[12:]}: position unknown>'
+            return f'<ArucoMarkerObj {self.marker_id}: position unknown>'
         
 
 class WallObj(WorldObject):
@@ -152,17 +174,15 @@ class WallObj(WorldObject):
             #       f' diff = {neaten(abs(wrap_angle(self.sensor_orient - obj.sensor_orient))*180/pi)}  result: {result}')
         return result
 
-wall_marker_dict = dict()
 
 class WallSpec():
-    def __init__(self, label=None, length=100, height=210, marker_specs=dict(), doorways=dict()):
+    def __init__(self, wall_marker_dict, label=None, length=100, height=210, marker_specs=dict(), doorways=dict()):
         self.length = length
         self.height = height
         self.marker_specs = marker_specs
         self.doorways = doorways
         marker_id_numbers = list(marker_specs.keys())
         self.label = label or f'Wall-{min(marker_id_numbers)}'
-        global wall_marker_dict
         for id in marker_id_numbers:
             wall_marker_dict[id] = self
         wall_marker_dict[self.label] = self
@@ -226,12 +246,14 @@ class WorldMap():
 
     def __init__(self,robot):
         self.robot = robot
+        self._lock = threading.RLock()
         self.objects = dict()
         self.pending_objects = dict()
         self.missing_objects = []
         self.shared_objects = dict()
         self.name_counts = dict()  # For generating new object names
         self.visibility_paused = False
+        self.last_held_time = -1
 
         # Phase 7: Occupancy Grid
         if OccupancyGrid:
@@ -245,17 +267,37 @@ class WorldMap():
         self.frames_not_visible = dict()
 
     def __repr__(self):
-        return f'<WorldMap with {len(self.objects)} objects>'
+        with self._lock:
+            count = len(self.objects)
+        return f'<WorldMap with {count} objects>'
+
+    def snapshot_objects(self):
+        with self._lock:
+            snapshot = {}
+            for key, obj in self.objects.items():
+                try:
+                    cloned = copy.copy(obj)
+                    pose = getattr(obj, "pose", None)
+                    if pose is not None:
+                        try:
+                            cloned.pose = PoseEstimate(pose)
+                        except Exception:
+                            cloned.pose = copy.copy(pose)
+                    snapshot[key] = cloned
+                except Exception:
+                    snapshot[key] = obj
+            return snapshot
 
     def clear(self):
-        self.robot.particle_filter.clear_landmarks()
-        self.objects.clear()
-        self.pending_objects.clear()
-        self.missing_objects = []
-        self.shared_objects.clear()
-        self.name_counts.clear()
-        if self.occupancy_grid:
-            self.occupancy_grid.clear()
+        with self._lock:
+            self.robot.particle_filter.clear_landmarks()
+            self.objects.clear()
+            self.pending_objects.clear()
+            self.missing_objects = []
+            self.shared_objects.clear()
+            self.name_counts.clear()
+            if self.occupancy_grid:
+                self.occupancy_grid.clear()
 
     def update_grid_from_depth(self, depth_map, intrinsics, extrinsics, robot_pose=None):
         """Update occupancy grid from depth map and camera parameters.
@@ -358,17 +400,22 @@ class WorldMap():
         """Turn off visibility of objects when the robot is moving.  We won't
         turn it back on until the robot has stopped AND we have processed a new
         camera frame so visibilities are updated."""
-        self.visibility_paused = value
+        with self._lock:
+            if self.visibility_paused != value:
+                self.visibility_paused = value
 
     def update(self):
-        self.updated_objects = []
-        self.make_new_objects_from_vision()
-        self.associate_objects()
-        self.update_associated_objects()
-        self.detect_missing_objects()
-        self.process_unassociated_objects()
-        self.update_visibilities()
-        self.update_holding()
+        with self._lock:
+            if self.visibility_paused:
+                return
+            self.updated_objects = []
+            self.make_new_objects_from_vision()
+            self.associate_objects()
+            self.update_associated_objects()
+            self.detect_missing_objects()
+            self.process_unassociated_objects()
+            self.update_visibilities()
+            self.update_holding()
 
     def make_new_objects_from_vision(self):
         self.candidates = list()
@@ -390,7 +437,7 @@ class WorldMap():
             obj = AprilTagObj(spec)
         else:
             print(f"ERROR **** spec = {spec}")
-            obj = None
+            return None
         return obj
 
     def make_new_aiv_objects(self):
@@ -408,19 +455,34 @@ class WorldMap():
             else:
                 print(f'*** Unknown: spec={spec}')
                 continue
+            if spec['name'] == 'Robot':   # avoid spurious robot creation for now
+                continue
+
             obj = self.make_vision_object(spec)
             obj.is_visible = True
+
             # Calculate midpoint of bottom edge, which we assume is on the floor
-            cx = (spec['originx'] + spec['width']/2) * AIVISION_RESOLUTION_SCALE
-            # correct height for possible occlusion by foreground object
-            corr_height = max(spec['height'], spec['width']*1.10)
+            height = spec['height']
+            width = spec['width']
+            cx = (spec['originx'] + width/2) * AIVISION_RESOLUTION_SCALE
+            if isinstance(obj, BarrelObj):
+                # correct height for possible occlusion by foreground object
+                corr_height = max(height, width*1.10)
+            elif isinstance(obj, AprilTagObj):
+                corr_height = min(height, width)
+            else:
+                corr_height = height
             cy = (spec['originy'] + corr_height) * AIVISION_RESOLUTION_SCALE
             if isinstance(obj, AprilTagObj):
-                cy += spec['height'] * 2 * AIVISION_RESOLUTION_SCALE
+                TAG_TO_GROUND_CORRECTION = 1.25 # should be 2.0 but empirically 1.25 works better
+                cy += corr_height * TAG_TO_GROUND_CORRECTION * AIVISION_RESOLUTION_SCALE
             hit = self.robot.kine.project_to_ground(cx, cy)
+            angle = atan2(hit[1,0], hit[0,0])
             # offset hit by half the object thickness
             if obj.__dict__.get('diameter'):
-                hit += point(obj.diameter / 2, 0, 0)   # *** should calculate y offset too
+                half_diameter = obj.diameter / 2
+                increment = point(cos(angle) * half_diameter, sin(angle) * half_diameter, 0)
+                hit += increment
             # convert to world coordinates
             robotpos = point(self.robot.pose.x, self.robot.pose.y)
             objpos = aboutZ(self.robot.pose.theta).dot(hit) + robotpos
@@ -432,17 +494,26 @@ class WorldMap():
                 continue
             obj.sensor_distance = distance
             if isinstance(obj, AprilTagObj):
+                obj.sensor_bearing = angle
                 tag_angle_correction_factor = 4  # guesstimate
                 angle = spec['angle'] - (0 if spec['angle'] < 180 else 360)
-                theta = self.robot.pose.theta - angle / 180 * pi * tag_angle_correction_factor
+                obj.sensor_orient = wrap_angle(pi - angle / 180 * pi * tag_angle_correction_factor)
+                theta = wrap_angle(self.robot.pose.theta + obj.sensor_orient)
             else:
                 theta = None
             obj.pose = Pose(x, y, 0, theta)
+            if self.check_spec_indicates_held(obj):
+                self.reposition_held_object(obj)
             self.candidates.append(obj)
 
     def make_new_aruco_objects(self):
         camera_offset_vector = np.array([0, 0, self.robot.kine.camera_from_origin])
-        for (id,marker) in self.robot.aruco_detector.seen_marker_objects.copy().items():
+        detector = self.robot.aruco_detector
+        if hasattr(detector, "snapshot_seen_markers"):
+            seen_markers = detector.snapshot_seen_markers()
+        else:
+            seen_markers = detector.seen_marker_objects.copy()
+        for (id,marker) in seen_markers.items():
             name = f'ArucoMarker-{id}'
             spec = {'name': name, 'id': id, 'marker': marker}
             sensor_coords = marker.camera_coords + camera_offset_vector
@@ -462,11 +533,15 @@ class WorldMap():
             self.candidates.append(obj)
 
     def make_new_wall_objects(self):
-        seen = self.robot.aruco_detector.seen_marker_objects.copy()
+        detector = self.robot.aruco_detector
+        if hasattr(detector, "snapshot_seen_markers"):
+            seen = detector.snapshot_seen_markers()
+        else:
+            seen = detector.seen_marker_objects.copy()
         wall_markers = dict()
         for (id,marker) in seen.items():
-            if id in wall_marker_dict:
-                spec = wall_marker_dict[id]
+            if id in self.robot.world_map.wall_marker_dict:
+                spec = self.robot.world_map.wall_marker_dict[id]
                 if spec.label not in wall_markers:
                     wall_markers[spec.label] = list()
                 wall_markers[spec.label].append((id,marker))
@@ -474,7 +549,7 @@ class WorldMap():
             orients = [marker[1].euler_angles[1] for marker in markers]
             orig_orients = copy.copy(orients)
             if len(orients) == 1:
-                # one marker is enough to update a wall if we're localizeds
+                # one marker is enough to update a wall if we're localized
                 if self.robot.particle_filter.state != self.robot.particle_filter.LOCALIZED:
                     continue
             elif len(orients) == 2:
@@ -499,18 +574,22 @@ class WorldMap():
                 if len(orients) < 2:
                     print('outlier removal left us one marker:', markers)
             wall = self.infer_wall_from_corners_lists(wall_id, markers)
+            if wall is None:
+                continue
             wall.aruco_orients = orients
             wall.seen_markers = markers
             self.candidates.append(wall)
+            #print('candidate:', wall, 'orients(deg)=', [o*180/pi for o in orients])
             # Don't make doorways until wall is confirmed in world map
-            if [k for k in self.robot.world_map.objects.keys() if k.startswith(wall.name)]:
+            if [k for k in self.objects.keys() if k.startswith(wall.name)]:
                 self.make_doorways_from_wall(wall)
 
     def infer_wall_from_corners_lists(self, wall_id, markers):
-        wall_spec = wall_marker_dict[wall_id]
+        wall_spec = self.robot.world_map.wall_marker_dict[wall_id]
         marker_size = self.robot.aruco_detector.marker_size
         world_points = []
         image_points = []
+        last_solution = None
         for (id, marker) in markers:
             length = wall_spec.length
             side = wall_spec.marker_specs[id]['side']
@@ -538,12 +617,17 @@ class WorldMap():
                       'world_points=', world_points, '\n',
                       'image_points=', image_points)
                 continue
+            if success:
+                last_solution = (rvec, tvec, side)
+        if last_solution is None:
+            return None
+        rvec, tvec, side = last_solution
         rotationm, jacob = cv2.Rodrigues(rvec)
         euler_angles = rotation_matrix_to_euler_angles(rotationm)
         wall_orient = euler_angles[1]
         tvec[2][0] += self.robot.kine.camera_from_origin  # want distance from base frame not camera
 
-        sensor_coords = (-tvec[0], -tvec[1], tvec[2])
+        sensor_coords = (-tvec[0,0], -tvec[1,0], tvec[2,0])
         sensor_distance = math.sqrt(sensor_coords[0]**2 + sensor_coords[2]**2)
         sensor_bearing = atan2(sensor_coords[0], sensor_coords[2])
         # Flip wall orientation to match ArUcos for worldmap
@@ -611,6 +695,8 @@ class WorldMap():
             for j in range(N_old):
                 if otype is ArucoMarkerObj and new[i].marker_id != old[j].marker_id:
                     costs[i,j] = MAX_ACCEPTABLE_COST + 1
+                elif otype is AprilTagObj and new[i].tag_id != old[j].tag_id:
+                    costs[i,j] = MAX_ACCEPTABLE_COST + 1
                 else:
                     costs[i,j] = self.association_cost(new[i], old[j])
         # *** Greedy algorithm; replace with the Hungarian algorithm
@@ -619,6 +705,7 @@ class WorldMap():
             if costs[i,bestj] < MAX_ACCEPTABLE_COST:
                 new[i].matched = old[bestj]
                 costs[:,bestj] = 1 + MAX_ACCEPTABLE_COST
+        #print(f'{old=}  {new=}  {costs=}  {new[0].matched=}')
 
     def update_associated_objects(self):
         for candidate in self.candidates:
@@ -707,7 +794,7 @@ class WorldMap():
         COST_THRESHOLD = 50
         if self.robot.particle_filter and \
            self.robot.particle_filter.state != self.robot.particle_filter.LOCALIZED:
-            return
+            pass # return
         if self.robot.particle_filter:
             pass # print('robot.particle_filter.state=', self.robot.particle_filter.state)
         for candidate in unassociated:
@@ -733,7 +820,6 @@ class WorldMap():
                 pending.remove(m)
             else:
                 self.pending_objects[candidate] = 1
-                #print('proposed', candidate)
         for p in pending:
             #print('retracted', p, '  count=', self.pending_objects[p])
             del self.pending_objects[p]
@@ -743,16 +829,18 @@ class WorldMap():
         missing = [m for m in self.missing_objects if type(m) == t]
         if hasattr(obj,'marker_id'):
             missing = [m for m in missing if m.marker_id == obj.marker_id]
+        if hasattr(obj,'tag_id'):
+            missing = [m for m in missing if m.tag_id == obj.tag_id]
         if len(missing) == 0:
             return None
         costs = [self.association_cost(obj, m) for m in missing]
         min_index = np.argmin(costs)
         match = missing[min_index]
         match.is_visible = True
+        match.is_missing = False
         match.pose = PoseEstimate(obj.pose)
         self.updated_objects.append(match)
         self.missing_objects.remove(match)
-        match.is_visible = True
         #print('reclaimed', match)
         return match
         
@@ -782,99 +870,121 @@ class WorldMap():
             self.confirm_not_holding()
 
     def confirm_still_holding(self):
+        MIN_UNHOLDING_TIME = 0.75  # seconds
+        t = time.time()
         if (isinstance(self.robot.holding, BarrelObj) and self.robot.robot0.has_any_barrel()) or \
             (isinstance(self.robot.holding, SportsBallObj) and self.robot.robot0.has_sports_ball()):
-                return
+            self.last_held_time = t
         else:
-            print('No longer holding', self.robot.holding)
-            self.robot.holding.held_by = None
-            self.robot.holding = None
+            if t - self.last_held_time > MIN_UNHOLDING_TIME:
+                # held object has been gone long enough
+                print('No longer holding', self.robot.holding)
+                self.robot.holding.held_by = None
+                self.robot.holding = None
+            else:
+                pass # wait a bit to see if held object comes back
+
+    def check_spec_indicates_held(self, obj):
+        if not isinstance(obj, (BarrelObj,SportsBallObj)):
+            return False
+        if isinstance(obj, BarrelObj):
+            max_left = 150
+            min_right = 460
+        else:
+            max_left = 200
+            min_right = 470
+        spec = obj.spec
+        #print(f"left={spec['originx']*AIVISION_RESOLUTION_SCALE}  {max_left=}  " + \
+        #      f"right={(spec['originx'] + spec['width']) * AIVISION_RESOLUTION_SCALE} {min_right=}")
+        #
+        # never seen objects acquired from map layout won't have originx
+        if 'originx' in spec and \
+           spec['originx']*AIVISION_RESOLUTION_SCALE < max_left and \
+           (spec['originx'] + spec['width']) * AIVISION_RESOLUTION_SCALE > min_right:
+            return True
+        else:
+            return False
 
     def confirm_not_holding(self):
-        if not (self.robot.robot0.has_any_barrel() or self.robot.robot0.has_sports_ball()):
-            return
-        else:
-            held = None
-            for obj in self.robot.world_map.objects.values():
-                if isinstance(obj, (BarrelObj,SportsBallObj)):
-                    spec = obj.spec
-                    if isinstance(obj, BarrelObj):
-                        width_margin = 130
-                    else:
-                        width_margin = 120
-                    if spec['originx']*AIVISION_RESOLUTION_SCALE < width_margin and \
-                       (spec['originx'] + spec['width']) * AIVISION_RESOLUTION_SCALE > (self.robot.camera.resolution[0] - width_margin):
-                        held = obj
-                        break
-            if held:
-                print('Robot now holding', held)
-                self.robot.holding = held
-                held.held_by = self.robot
+        if self.robot.robot0.has_any_barrel() or self.robot.robot0.has_sports_ball():
+            held_obj = None
+            for obj in self.objects.values():
+                if obj.is_visible and self.check_spec_indicates_held(obj):
+                    held_obj = obj
+                    break
+            if held_obj:
+                print('Robot now holding', held_obj)
+                self.robot.holding = held_obj
+                held_obj.held_by = self.robot
             else:
-                pass
-                # print('*** Could not find held object.')
+                pass # print('*** Could not find held object.')
+
+    def reposition_held_object(self, obj):
+        r = self.robot.kine.body_diameter/2 + obj.diameter/2
+        pt = aboutZ(self.robot.pose.theta).dot(point(r,0))
+        obj.pose.x = self.robot.pose.x + pt[0,0]
+        obj.pose.y = self.robot.pose.y + pt[1,0]
 
     def update_held_object(self):
         if self.robot.holding:
-            r = self.robot.kine.body_diameter/2 + self.robot.holding.diameter/2
-            pt = aboutZ(self.robot.pose.theta).dot(point(r,0))
-            self.robot.holding.pose.x = self.robot.pose.x + pt[0,0]
-            self.robot.holding.pose.y = self.robot.pose.y + pt[1,0]
+            self.reposition_held_object(self.robot.holding)
 
     def show_objects(self):
-        objs = sorted(self.objects.items(), key=lambda x: x[0])
-        if len(objs) == 0:
-            print('No objects in the world map.\n')
-            return
-        width = max([len(x[0]) for x in objs])
-        for obj in objs:
-            print(f'{obj[0].rjust(width)}: {obj[1]}')
-        print()
+        with self._lock:
+            objs = sorted(self.objects.items(), key=lambda x: x[0])
+            if len(objs) == 0:
+                print('No objects in the world map.\n')
+                return
+            width = max([len(x[0]) for x in objs])
+            for obj in objs:
+                print(f'{obj[0].rjust(width)}: {obj[1]}')
+            print()
 
 
 
 ################ GPT interface ################
 
     def get_prompt(self):
-        prompt = ''
-        prompt += f'It is now {datetime.datetime.now().strftime("%B %d, %Y, %I:%M:%S %p")}.\n'
-        if self.robot.particle_filter.state == self.robot.particle_filter.LOCALIZED:
-            prompt += f'You are located at ({round(self.robot.pose.x)}, {round(self.robot.pose.y)})\n'
-            prompt += f'Your heading is {round(self.robot.pose.theta*180/pi)} degrees\n'
-        else:
-            prompt += f'You are currently lost (not localized) and do not see any landmarks.\n'
-        if self.robot.holding:
-            prompt += f'You are currently holding {self.robot.holding.id}.\n'
-        else:
-            prompt += f'You are not currently holding anything.\n'
-        prompt += f'Your battery level is {self.robot.battery_percentage} percent.\n'
-        for (id,obj) in self.objects.items():
-            if not obj.is_missing:
-                if obj.is_visible:
-                    vis = "visible"
-                else:
-                    vis = "not vislbie"
-                prompt += f'{id} is located at ({round(obj.pose.x)}, {round(obj.pose.y)}) ' + \
-                    f'and is {vis}\n'
+        with self._lock:
+            prompt = ''
+            prompt += f'It is now {datetime.datetime.now().astimezone().strftime("%B %d, %Y, %I:%M:%S %p %Z")}.\n'
+            if self.robot.particle_filter.state == self.robot.particle_filter.LOCALIZED:
+                prompt += f'You are located at ({round(self.robot.pose.x)}, {round(self.robot.pose.y)})\n'
+                prompt += f'Your heading is {round(self.robot.pose.theta*180/pi)} degrees\n'
             else:
-                prompt += f'{id} is missing\n'
+                prompt += f'You are currently lost (not localized) and do not see any landmarks.\n'
+            if self.robot.holding:
+                prompt += f'You are currently holding {self.robot.holding.id}.\n'
+            else:
+                prompt += f'You are not currently holding anything.\n'
+            prompt += f'Your battery level is {self.robot.battery_percentage} percent.\n'
+            for (id,obj) in self.objects.items():
+                if not obj.is_missing:
+                    if obj.is_visible:
+                        vis = "visible"
+                    else:
+                        vis = "not visible"
+                    prompt += f'{id} is located at ({round(obj.pose.x)}, {round(obj.pose.y)}) ' + \
+                        f'and is {vis}\n'
+                else:
+                    prompt += f'{id} is missing\n'
 
-            if isinstance(obj, WallObj):
-                front_markers = []
-                back_markers = []
-                for marker_id, marker_info in obj.wall_spec.marker_specs.items():
-                    if marker_info['side'] == 1:  # +1 means front side
-                        front_markers.append(marker_id)
-                    else:  # -1 means back side
-                        back_markers.append(marker_id)
-                prompt += f'{obj.id} has markers {front_markers} on its front side and {back_markers} on its back side\n'   
+                if isinstance(obj, WallObj):
+                    front_markers = []
+                    back_markers = []
+                    for marker_id, marker_info in obj.wall_spec.marker_specs.items():
+                        if marker_info['side'] == 1:  # +1 means front side
+                            front_markers.append(marker_id)
+                        else:  # -1 means back side
+                            back_markers.append(marker_id)
+                    prompt += f'{obj.id} has markers {front_markers} on its front side and {back_markers} on its back side\n'   
 
-            if isinstance(obj, DoorwayObj):
-                prompt += f'{id} is part of {obj.wall.id}\n'
-        landmark_ids = list(self.robot.particle_filter.sensor_model.landmarks.keys())
-        if landmark_ids:
-            for id in landmark_ids:
-                prompt += f'{id} is a navigation landmark.'
-        else:
-            prompt += 'There are currently no navigation landmarks.'    
-        return prompt
+                if isinstance(obj, DoorwayObj) and obj.wall:
+                    prompt += f'{id} is part of {obj.wall.id}\n'
+            landmark_ids = list(self.robot.particle_filter.sensor_model.landmarks.keys())
+            if landmark_ids:
+                for id in landmark_ids:
+                    prompt += f'{id} is a navigation landmark.'
+            else:
+                prompt += 'There are currently no navigation landmarks.'    
+            return prompt

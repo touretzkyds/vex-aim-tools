@@ -13,12 +13,15 @@ from PyQt6.QtQuick import QQuickView
 from aim_fsm.rrt import RRT
 
 from .help_texts import PATH_HELP_TEXT
+from .lifecycle import stop_timer_if_view_hidden
 from .path_model import (
+    CircleItem,
     PathNodeModel,
     PathObstacleModel,
     PathPolylineModel,
     PathSceneProvider,
     PathSceneSnapshot,
+    RectangleItem,
     WavefrontTextureProvider,
 )
 
@@ -110,6 +113,8 @@ class PathViewer(QObject):
         self._wavefront_provider = WavefrontTextureProvider()
         self._wavefront_source = ""
         self._wavefront_square_size = 5.0
+        self._wavefront_origin_x = 0.0
+        self._wavefront_origin_y = 0.0
         self._scene_snapshot: PathSceneSnapshot = PathSceneSnapshot.empty()
         self._view_state = PathViewState()
         self._help_text = PATH_HELP_TEXT
@@ -121,6 +126,7 @@ class PathViewer(QObject):
         self._view = QQuickView()
         self._view.setTitle(self._window_name)
         self._view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        self._bind_visibility_handler()
 
         self._context = self._initialise_qml_context()
         self.refresh()
@@ -144,6 +150,14 @@ class PathViewer(QObject):
     def wavefrontSquareSize(self) -> float:
         return self._wavefront_square_size
 
+    @pyqtProperty(float, notify=sceneChanged)
+    def wavefrontOriginX(self) -> float:
+        return self._wavefront_origin_x
+
+    @pyqtProperty(float, notify=sceneChanged)
+    def wavefrontOriginY(self) -> float:
+        return self._wavefront_origin_y
+
     @pyqtProperty(str, notify=sceneChanged)
     def statusText(self) -> str:
         return self._scene_snapshot.status_text or ""
@@ -152,20 +166,40 @@ class PathViewer(QObject):
     # Legacy-compatible surface
 
     def start(self) -> None:
+        import threading
         if self._auto_redisplay and not self._timer.isActive() and self._timer.interval() > 0:
             self._timer.start()
         self._view.setWidth(self._width)
         self._view.setHeight(self._height)
         self._view.show()
         self._focus_root()
-        print(self._help_text, end="")
+        #print(self._help_text, end="")
 
     def stop(self) -> None:
         self._timer.stop()
         self._view.close()
 
+    def is_visible(self) -> bool:
+        return self._view.isVisible()
+
     def clear(self) -> None:
         self._scene_provider.clear_extra_trees()
+        rrt = self._rrt or getattr(self._robot, "rrt", None)
+        if rrt is not None:
+            rrt.treeA = []
+            rrt.treeB = []
+            rrt.path = []
+            rrt.draw_path = []
+            rrt.obstacles = []
+            rrt.goal_obstacle = None
+            rrt.grid_display = None
+            rrt.text = None
+        path_planner = getattr(self._robot, "path_planner", None)
+        if path_planner is not None:
+            try:
+                path_planner.wf = None
+            except Exception:
+                pass
         self.refresh()
 
     def add_tree(self, tree, color) -> None:
@@ -195,6 +229,12 @@ class PathViewer(QObject):
         source_key, square_size = self._wavefront_provider.update_frame(snapshot.wavefront)
         self._wavefront_source = f"image://wavefront/{source_key}" if source_key else ""
         self._wavefront_square_size = square_size
+        if snapshot.wavefront is not None:
+            self._wavefront_origin_x = float(snapshot.wavefront.origin_x)
+            self._wavefront_origin_y = float(snapshot.wavefront.origin_y)
+        else:
+            self._wavefront_origin_x = 0.0
+            self._wavefront_origin_y = 0.0
 
         self.sceneChanged.emit()
 
@@ -292,6 +332,16 @@ class PathViewer(QObject):
             raise RuntimeError(f"Failed to load PathViewer.qml:\n{errors}")
         return context
 
+    def _bind_visibility_handler(self) -> None:
+        signal = getattr(self._view, "visibleChanged", None)
+        if signal is None:
+            signal = getattr(self._view, "visibilityChanged", None)
+        if signal is not None:
+            signal.connect(self._handle_visibility_changed)
+
+    def _handle_visibility_changed(self, *args) -> None:
+        stop_timer_if_view_hidden(self._view, self._timer)
+
     def _focus_root(self) -> None:
         try:
             root = self._view.rootObject()
@@ -299,6 +349,36 @@ class PathViewer(QObject):
             return
         if root is not None and hasattr(root, "forceActiveFocus"):
             root.forceActiveFocus()
+
+    @staticmethod
+    def _shape_dict(item: CircleItem | RectangleItem) -> dict:
+        if isinstance(item, CircleItem):
+            return {
+                "type": "circle",
+                "x": float(item.x),
+                "y": float(item.y),
+                "radius": float(item.radius_mm),
+                "width": 0.0,
+                "height": 0.0,
+                "rotation": 0.0,
+                "color": list(item.color_rgba),
+                "filled": bool(item.filled),
+                "tag": item.tag or "",
+            }
+        if isinstance(item, RectangleItem):
+            return {
+                "type": "rectangle",
+                "x": float(item.x),
+                "y": float(item.y),
+                "radius": 0.0,
+                "width": float(item.width_mm),
+                "height": float(item.height_mm),
+                "rotation": float(item.rotation_deg),
+                "color": list(item.color_rgba),
+                "filled": bool(item.filled),
+                "tag": item.tag or "",
+            }
+        return {}
 
     # ------------------------------------------------------------------
     # Data access for QML (temporary getters until models exist)

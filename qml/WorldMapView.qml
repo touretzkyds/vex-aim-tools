@@ -44,7 +44,7 @@ View3D {
 
     function worldToSceneVector(xMm, yMm, zMm) {
         const s = worldScale
-        return Qt.vector3d(-yMm * s, zMm * s, -xMm * s)
+        return Qt.vector3d(xMm * s, zMm * s, -yMm * s)
     }
 
     function radiansToDegrees(angle) {
@@ -227,7 +227,7 @@ View3D {
 
         Node {
             id: sceneBasis
-            rotation: Qt.quaternion(0.5, -0.5, 0.5, 0.5)
+            rotation: Qt.quaternion(0.7071, -0.7071, 0, 0)
             scale: Qt.vector3d(worldScale, worldScale, worldScale)
 
             Node {
@@ -439,23 +439,69 @@ View3D {
     Component {
         id: ballDelegate
         Node {
+            id: ballRoot
             property var model
+            parent: sceneFrame
             visible: !model.missing
             readonly property real radiusMm: (model.diameter_mm || 25) / 2
-            // Use model.z which is already computed in Python (diameter/2)
             position: Qt.vector3d(model.x, model.y, model.z)
             eulerRotation.z: radiansToDegrees(model.theta)
 
             Model {
+                visible: !model.missing
                 source: "#Sphere"
-                // Qt Quick 3D #Sphere: diameter=100. Scale to mm diameter.
                 scale: Qt.vector3d(parent.radiusMm * 2 / 100, parent.radiusMm * 2 / 100, parent.radiusMm * 2 / 100)
                 materials: PrincipledMaterial {
-                    // Legacy ball color: (0.9, 0.7, 0.1) = #e6b319 yellow
                     baseColor: model.visible ? "#e6b319" : "#8a6b0f"
                     roughness: 0.3
                     cullMode: Material.NoCulling
                     emissiveFactor: model.visible ? Qt.vector3d(0.1, 0.08, 0.01) : Qt.vector3d(0, 0, 0)
+                }
+            }
+
+            Node {
+                id: ballWireframe
+                visible: ballRoot.model.missing
+                readonly property int circleSegments: 20
+                readonly property real lineThick: 0.8
+
+                PrincipledMaterial {
+                    id: ballWireMat
+                    baseColor: "#8a6b0f"
+                    roughness: 0.3
+                    cullMode: Material.NoCulling
+                }
+
+                Repeater3D {
+                    model: [
+                        Qt.vector3d(0, 0, 0),
+                        Qt.vector3d(90, 0, 0),
+                        Qt.vector3d(90, 0, 45),
+                        Qt.vector3d(90, 0, 90),
+                        Qt.vector3d(90, 0, 135),
+                        Qt.vector3d(45, 0, 0),
+                        Qt.vector3d(45, 0, 60),
+                        Qt.vector3d(45, 0, 120)
+                    ]
+                    Node {
+                        eulerRotation: modelData
+                        Repeater3D {
+                            model: ballWireframe.circleSegments
+                            Model {
+                                source: "#Cube"
+                                readonly property real midAngle: (index + 0.5) * 2 * Math.PI / ballWireframe.circleSegments
+                                readonly property real chord: 2 * ballRoot.radiusMm * Math.sin(Math.PI / ballWireframe.circleSegments)
+                                position: Qt.vector3d(
+                                    ballRoot.radiusMm * Math.cos(midAngle),
+                                    ballRoot.radiusMm * Math.sin(midAngle),
+                                    0
+                                )
+                                eulerRotation.z: midAngle * 180 / Math.PI
+                                scale: Qt.vector3d(ballWireframe.lineThick / 100, chord / 100, ballWireframe.lineThick / 100)
+                                materials: ballWireMat
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -464,27 +510,27 @@ View3D {
     Component {
         id: barrelDelegate
         Node {
+            id: barrelRoot
             property var model
+            parent: sceneFrame
             visible: !model.missing
             readonly property real radiusMm: (model.diameter_mm || 22) / 2
             readonly property real heightMm: model.height_mm || 25
-            // Use model.z which is already computed in Python (height/2)
             position: Qt.vector3d(model.x, model.y, model.z)
             eulerRotation.z: radiansToDegrees(model.theta)
 
             Model {
+                visible: !model.missing
                 source: "#Cylinder"
                 eulerRotation.x: 90
-                // Qt Quick 3D #Cylinder: diameter=100, height=100
                 scale: Qt.vector3d(parent.radiusMm / 50, parent.heightMm / 100, parent.radiusMm / 50)
                 materials: PrincipledMaterial {
-                    // Match legacy colors: OrangeBarrel=(1.0,0.5,0.063), BlueBarrel=(0.28,0.44,0.95)
                     baseColor: {
                         if (model.type === "barrel_orange")
                             return model.visible ? "#ff8010" : "#994d0a"
                         if (model.type === "barrel_blue")
                             return model.visible ? "#4770f2" : "#2a4391"
-                        return model.visible ? "#18d0ff" : "#0e7e97"  // fallback cyan
+                        return model.visible ? "#18d0ff" : "#0e7e97"
                     }
                     roughness: 0.45
                     cullMode: Material.NoCulling
@@ -492,10 +538,83 @@ View3D {
                         if (!model.visible)
                             return Qt.vector3d(0, 0, 0)
                         if (model.type === "barrel_orange")
-                            return Qt.vector3d(0.15, 0.08, 0.01)  // warm orange glow
+                            return Qt.vector3d(0.15, 0.08, 0.01)
                         if (model.type === "barrel_blue")
-                            return Qt.vector3d(0.05, 0.08, 0.18)  // cool blue glow
-                        return Qt.vector3d(0.06, 0.2, 0.25)  // fallback cyan glow
+                            return Qt.vector3d(0.05, 0.08, 0.18)
+                        return Qt.vector3d(0.06, 0.2, 0.25)
+                    }
+                }
+            }
+
+            Node {
+                id: barrelWireframe
+                visible: barrelRoot.model.missing
+                readonly property int rimSegments: 8
+                readonly property int strutCount: 8
+                readonly property real lineThick: 2.5 // 0.8
+
+                PrincipledMaterial {
+                    id: barrelWireMat
+                    baseColor: {
+                        if (barrelRoot.model.type === "barrel_orange")
+                            return "#ed8528" // "#994d0a"
+                        if (barrelRoot.model.type === "barrel_blue")
+                            return "#5879e0" // "#2a4391"
+                        return "#0e7e97"
+                    }
+                    roughness: 0.3
+                    cullMode: Material.NoCulling
+                }
+
+                Repeater3D {
+                    model: barrelWireframe.rimSegments * 2
+                    Model {
+                        source: "#Cube"
+                        readonly property int ringIdx: index % barrelWireframe.rimSegments
+                        readonly property real zSign: index < barrelWireframe.rimSegments ? 1 : -1
+                        readonly property real midAngle: (ringIdx + 0.5) * 2 * Math.PI / barrelWireframe.rimSegments
+                        readonly property real chord: 2 * barrelRoot.radiusMm * Math.sin(Math.PI / barrelWireframe.rimSegments)
+                        position: Qt.vector3d(
+                            barrelRoot.radiusMm * Math.cos(midAngle),
+                            barrelRoot.radiusMm * Math.sin(midAngle),
+                            zSign * barrelRoot.heightMm / 2
+                        )
+                        eulerRotation.z: midAngle * 180 / Math.PI
+                        scale: Qt.vector3d(barrelWireframe.lineThick / 100, chord / 100, barrelWireframe.lineThick / 100)
+                        materials: barrelWireMat
+                    }
+                }
+
+                Repeater3D {
+                    model: barrelWireframe.strutCount
+                    Model {
+                        source: "#Cube"
+                        readonly property real strutAngle: index * 2 * Math.PI / barrelWireframe.strutCount
+                        position: Qt.vector3d(
+                            barrelRoot.radiusMm * Math.cos(strutAngle),
+                            barrelRoot.radiusMm * Math.sin(strutAngle),
+                            0
+                        )
+                        scale: Qt.vector3d(barrelWireframe.lineThick / 100, barrelWireframe.lineThick / 100, barrelRoot.heightMm / 100)
+                        materials: barrelWireMat
+                    }
+                }
+
+                Repeater3D {
+                    model: barrelWireframe.rimSegments * 2
+                    Model {
+                        source: "#Cube"
+                        readonly property int spokeIdx: index % barrelWireframe.rimSegments
+                        readonly property real zSign: index < barrelWireframe.rimSegments ? 1 : -1
+                        readonly property real spokeAngle: spokeIdx * 2 * Math.PI / barrelWireframe.rimSegments
+                        position: Qt.vector3d(
+                            barrelRoot.radiusMm / 2 * Math.cos(spokeAngle),
+                            barrelRoot.radiusMm / 2 * Math.sin(spokeAngle),
+                            zSign * barrelRoot.heightMm / 2
+                        )
+                        eulerRotation.z: spokeAngle * 180 / Math.PI
+                        scale: Qt.vector3d(barrelRoot.radiusMm / 100, barrelWireframe.lineThick / 100, barrelWireframe.lineThick / 100)
+                        materials: barrelWireMat
                     }
                 }
             }
@@ -505,88 +624,149 @@ View3D {
     Component {
         id: markerDelegate
         Node {
+            id: markerRoot
             property var model
+            parent: sceneFrame
             visible: !model.missing
             // Legacy AprilTag: width=38mm (Y-axis), height=48mm (Z-axis), thickness=2mm (X-axis)
             readonly property real widthMm: model.width_mm || 38
             readonly property real heightMm: model.height_mm || 48
             readonly property real thicknessMm: model.thickness_mm || 2
-            // Use model.z which is already computed in Python (height/2 = 24mm)
             position: Qt.vector3d(model.x, model.y, model.z)
             eulerRotation.z: radiansToDegrees(model.theta)
 
-            // Main marker body
             Model {
+                visible: !model.missing
                 source: "#Cube"
-                // Qt Quick 3D #Cube: edge length=100
-                // Scale: X=thickness, Y=width, Z=height
                 scale: Qt.vector3d(thicknessMm / 100, widthMm / 100, heightMm / 100)
                 materials: PrincipledMaterial {
-                    // Legacy apriltag color: (0.5, 0.3, 0.9) = #804ce6 purple
-                    baseColor: model.type === "apriltag" ? "#804ce6" : "#202020"
-                    emissiveFactor: model.visible
-                                    ? (model.type === "apriltag"
-                                       ? Qt.vector3d(0.08, 0.05, 0.15)  // purple glow
-                                       : Qt.vector3d(0.1, 0.1, 0.1))
-                                    : Qt.vector3d(0.02, 0.02, 0.02)
+                    baseColor: {
+                        if (model.type === "apriltag")
+                            return "#804ce6";
+                        if (model.type === "aruco")
+                            return model.visible ? "#00ff00" : "#1f431f";
+                        return "#202020";
+                    }
+                    emissiveFactor: {
+                        if (!model.visible)
+                            return Qt.vector3d(0.02, 0.02, 0.02);
+                        if (model.type === "apriltag")
+                            return Qt.vector3d(0.08, 0.05, 0.15);
+                        if (model.type === "aruco")
+                            return Qt.vector3d(0.08, 0.16, 0.08);
+                        return Qt.vector3d(0.1, 0.1, 0.1);
+                    }
                     roughness: 0.2
                     cullMode: Material.NoCulling
                 }
             }
 
-            // Hidden 2D Image to load texture from image provider
             Image {
-                id: tagImage
-                source: model.type === "apriltag" ? "image://tagtexture/" + String(model.marker_id) : ""
+                id: tagImageFront
+                source: (model.type === "apriltag" || model.type === "aruco")
+                        ? "image://tagtexture/" + (model.type === "aruco" ? "aruco-" : "") + String(model.marker_id)
+                        : ""
+                visible: false
+                cache: true
+            }
+
+            Image {
+                id: tagImageBack
+                source: (model.type === "apriltag" || model.type === "aruco")
+                        ? "image://tagtexture/back-" + (model.type === "aruco" ? "aruco-" : "") + String(model.marker_id)
+                        : ""
                 visible: false
                 cache: true
             }
             
-            // Text label panel - Front face (+X direction)
             Model {
                 id: textPanelFront
-                visible: model.type === "apriltag" && model.marker_id !== null && model.marker_id !== undefined && model.marker_id !== ""
+                visible: !model.missing
+                         && (model.type === "apriltag" || model.type === "aruco")
+                         && model.marker_id !== null && model.marker_id !== undefined && model.marker_id !== ""
                 source: "#Cube"
-                // Very thin panel; after X-rotation by 90°, original Y→Z, Z→Y in world coords
-                // So we swap width/height in scale to match world coordinates
                 scale: Qt.vector3d(0.005, heightMm / 100, widthMm / 100)
-                // Position in front of the marker
                 position: Qt.vector3d(thicknessMm / 2 + 0.5, 0, 0)
-                // Correct rotation: Only X-axis 90 degrees
                 eulerRotation: Qt.vector3d(90, 0, 0)
                 
                 materials: PrincipledMaterial {
                     baseColor: "#ffffff"
                     baseColorMap: Texture {
-                        sourceItem: tagImage
+                        sourceItem: tagImageFront
                     }
                     emissiveFactor: model.visible ? Qt.vector3d(0.1, 0.06, 0.2) : Qt.vector3d(0, 0, 0)
                     roughness: 0.1
                     cullMode: Material.NoCulling
                 }
+                opacity: model.visible ? 1.0 : 0.8
             }
             
-            // Text label panel - Back face (-X direction)
             Model {
                 id: textPanelBack
-                visible: model.type === "apriltag" && model.marker_id !== null && model.marker_id !== undefined && model.marker_id !== ""
+                visible: !model.missing
+                         && (model.type === "apriltag" || model.type === "aruco")
+                         && model.marker_id !== null && model.marker_id !== undefined && model.marker_id !== ""
                 source: "#Cube"
-                // Very thin panel; after X-rotation by 90°, original Y→Z, Z→Y in world coords
-                // So we swap width/height in scale to match world coordinates
                 scale: Qt.vector3d(0.005, heightMm / 100, widthMm / 100)
-                // Position behind the marker
                 position: Qt.vector3d(-thicknessMm / 2 - 0.5, 0, 0)
-                // Same rotation as front (mirrored by position, not rotation)
                 eulerRotation: Qt.vector3d(90, 0, 0)
                 
                 materials: PrincipledMaterial {
                     baseColor: "#ffffff"
                     baseColorMap: Texture {
-                        sourceItem: tagImage
+                        sourceItem: tagImageBack
                     }
                     emissiveFactor: model.visible ? Qt.vector3d(0.1, 0.06, 0.2) : Qt.vector3d(0, 0, 0)
                     roughness: 0.1
                     cullMode: Material.NoCulling
+                }
+                opacity: model.visible ? 1.0 : 0.8
+            }
+
+            Node {
+                id: markerWireframe
+                visible: markerRoot.model.missing
+                readonly property real lineThick: 0.8
+
+                PrincipledMaterial {
+                    id: markerWireMat
+                    baseColor: {
+                        if (markerRoot.model.type === "apriltag")
+                            return "#804ce6"
+                        if (markerRoot.model.type === "aruco")
+                            return "#1f431f"
+                        return "#202020"
+                    }
+                    roughness: 0.3
+                    cullMode: Material.NoCulling
+                }
+
+                Model {
+                    source: "#Cube"
+                    position: Qt.vector3d(0, 0, markerRoot.heightMm / 2)
+                    scale: Qt.vector3d(markerWireframe.lineThick / 100, markerRoot.widthMm / 100, markerWireframe.lineThick / 100)
+                    materials: markerWireMat
+                }
+
+                Model {
+                    source: "#Cube"
+                    position: Qt.vector3d(0, 0, -markerRoot.heightMm / 2)
+                    scale: Qt.vector3d(markerWireframe.lineThick / 100, markerRoot.widthMm / 100, markerWireframe.lineThick / 100)
+                    materials: markerWireMat
+                }
+
+                Model {
+                    source: "#Cube"
+                    position: Qt.vector3d(0, -markerRoot.widthMm / 2, 0)
+                    scale: Qt.vector3d(markerWireframe.lineThick / 100, markerWireframe.lineThick / 100, markerRoot.heightMm / 100)
+                    materials: markerWireMat
+                }
+
+                Model {
+                    source: "#Cube"
+                    position: Qt.vector3d(0, markerRoot.widthMm / 2, 0)
+                    scale: Qt.vector3d(markerWireframe.lineThick / 100, markerWireframe.lineThick / 100, markerRoot.heightMm / 100)
+                    materials: markerWireMat
                 }
             }
         }
@@ -625,31 +805,92 @@ View3D {
             readonly property real lengthMm: model.length_mm || 300
             readonly property real heightMm: model.height_mm || 210
             readonly property real thicknessMm: model.thickness_mm || 4
+            readonly property var doorways: (model.doorways && model.doorways.length) ? model.doorways : []
+            readonly property real wallBaseLocalZ: -heightMm / 2
+            readonly property real doorHeightMm: {
+                if (!doorways.length)
+                    return 0
+                var maxHeight = 0
+                for (var i = 0; i < doorways.length; ++i) {
+                    var h = Number(doorways[i].height) || 0
+                    if (h > maxHeight)
+                        maxHeight = h
+                }
+                return Math.max(0, Math.min(heightMm, maxHeight))
+            }
+            readonly property real lowerHeightMm: doorHeightMm > 0 ? doorHeightMm : heightMm
+            readonly property var lowerSegments: computeLowerSegments()
             // Use model.z which is already computed in Python (height/2)
             position: Qt.vector3d(model.x, model.y, model.z)
             eulerRotation.z: radiansToDegrees(model.theta)
 
-            Model {
-                source: "#Cube"
-                // Qt Quick 3D #Cube: edge length=100
-                scale: Qt.vector3d(thicknessMm / 100, lengthMm / 100, heightMm / 100)
-                materials: PrincipledMaterial {
-                    // Cliff edges use bright red, regular walls use gray
-                    baseColor: {
-                        if (model.id && String(model.id).indexOf("cliff_") === 0) {
-                            return "#ff0000"  // Bright red for cliff edges
-                        }
-                        return model.visible ? "#777777" : "#444444"
-                    }
-                    roughness: 0.4  // Slightly shiny for cliff visibility
-                    cullMode: Material.NoCulling
-                    emissiveFactor: {
-                        if (model.id && String(model.id).indexOf("cliff_") === 0) {
-                            return Qt.vector3d(0.3, 0.0, 0.0)  // Red glow for cliff edges
-                        }
-                        return model.visible ? Qt.vector3d(0.05, 0.05, 0.05) : Qt.vector3d(0, 0, 0)
-                    }
+            function computeLowerSegments() {
+                if (!doorways.length) {
+                    return [{ "center": 0, "width": lengthMm }]
                 }
+
+                var cursor = -lengthMm / 2
+                var end = lengthMm / 2
+                var segments = []
+                var sorted = []
+                for (var i = 0; i < doorways.length; ++i)
+                    sorted.push(doorways[i])
+                sorted.sort(function(a, b) { return Number(a.x) - Number(b.x) })
+
+                for (var j = 0; j < sorted.length; ++j) {
+                    var spec = sorted[j]
+                    var centerY = (Number(spec.x) || 0) - lengthMm / 2
+                    var width = Math.max(0, Number(spec.width) || 0)
+                    var left = centerY - width / 2
+                    var right = centerY + width / 2
+                    if (left > cursor) {
+                        var segWidth = left - cursor
+                        segments.push({
+                            "center": cursor + segWidth / 2,
+                            "width": segWidth
+                        })
+                    }
+                    cursor = Math.max(cursor, right)
+                }
+
+                if (cursor < end) {
+                    var tailWidth = end - cursor
+                    segments.push({
+                        "center": cursor + tailWidth / 2,
+                        "width": tailWidth
+                    })
+                }
+                return segments
+            }
+
+            PrincipledMaterial {
+                id: wallMaterial
+                baseColor: model.visible ? Qt.rgba(0.88, 0.78, 0.22, 0.74) : Qt.rgba(0.55, 0.48, 0.14, 0.60)
+                alphaMode: PrincipledMaterial.Blend
+                roughness: 0.65
+                cullMode: Material.NoCulling
+                emissiveFactor: model.visible ? Qt.vector3d(0.06, 0.06, 0.02) : Qt.vector3d(0.02, 0.02, 0.01)
+            }
+
+            Repeater3D {
+                model: lowerSegments.length
+                Model {
+                    property int idx: index
+                    source: "#Cube"
+                    property var seg: lowerSegments[idx]
+                    position: Qt.vector3d(0, Number(seg.center) || 0, wallBaseLocalZ + lowerHeightMm / 2)
+                    scale: Qt.vector3d(thicknessMm / 100, (Number(seg.width) || 0) / 100, lowerHeightMm / 100)
+                    materials: wallMaterial
+                }
+            }
+
+            Model {
+                visible: doorHeightMm > 0 && doorHeightMm < heightMm
+                source: "#Cube"
+                property real transomHeightMm: Math.max(0, heightMm - doorHeightMm)
+                position: Qt.vector3d(0, 0, wallBaseLocalZ + doorHeightMm + transomHeightMm / 2)
+                scale: Qt.vector3d(thicknessMm / 100, lengthMm / 100, transomHeightMm / 100)
+                materials: wallMaterial
             }
         }
     }

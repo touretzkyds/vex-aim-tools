@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -58,6 +59,7 @@ class QtViewerApp(QObject):
         self._snapshot_service = snapshot_service or SnapshotService()
         self._snapshot_service.enable_disk_write(snapshots_enabled)
         self._camera_provider.set_robot_ref(self._robot)
+        self._last_refresh_error_ts = 0.0
 
         self._frame_counter = 0
         self._timer = QTimer(self)
@@ -89,18 +91,19 @@ class QtViewerApp(QObject):
         return self._view
 
     def refresh(self) -> None:
+        snapshot = getattr(self._worldmap, "snapshot_objects", None)
         try:
-            update = getattr(self._worldmap, "update", None)
-            if callable(update):
-                update()
-        except Exception:
-            # Debug output belongs to the caller; swallow to keep viewer resilient.
-            pass
+            if callable(snapshot):
+                objects = snapshot() or {}
+            else:
+                objects = dict(getattr(self._worldmap, "objects", {}) or {})
+        except Exception as exc:
+            self._log_refresh_error(exc)
+            objects = {}
 
-        if self._worldmap and hasattr(self._worldmap, 'occupancy_grid'):
+        if self._worldmap and hasattr(self._worldmap, "occupancy_grid"):
             self._grid_provider.set_grid(self._worldmap.occupancy_grid)
 
-        objects = getattr(self._worldmap, "objects", {}) or {}
         self._model.sync_from(self._robot, objects)
 
     def start(self) -> None:
@@ -211,6 +214,12 @@ class QtViewerApp(QObject):
 
         print(f"[QtViewerApp] Snapshot saved to {path}")
         return str(path)
+
+    def _log_refresh_error(self, exc: Exception) -> None:
+        now = time.monotonic()
+        if now - self._last_refresh_error_ts >= 1.0:
+            print(f"[QtViewerApp] refresh failed: {exc}")
+            self._last_refresh_error_ts = now
 
 
 __all__ = ["QtViewerApp"]

@@ -117,6 +117,8 @@ class WavefrontFrame:
     square_size_mm: float
     goal_marker: int
     max_value: int
+    origin_x: float
+    origin_y: float
 
     def copy(self) -> "WavefrontFrame":
         return WavefrontFrame(
@@ -124,6 +126,8 @@ class WavefrontFrame:
             square_size_mm=self.square_size_mm,
             goal_marker=self.goal_marker,
             max_value=self.max_value,
+            origin_x=self.origin_x,
+            origin_y=self.origin_y,
         )
 
 
@@ -726,11 +730,23 @@ class PathSceneProvider:
             grid = np.array(wf.grid, copy=True)
             unique_vals = np.unique(grid)
             max_value = int(unique_vals[-2]) if unique_vals.size >= 2 else int(unique_vals[-1]) if unique_vals.size else 0
+            square_size = float(getattr(wf, "square_size", 5.0))
+            inflate = float(getattr(wf, "inflate_size", 0.0))
+            origin_x = 0.0
+            origin_y = 0.0
+            bbox = getattr(wf, "bbox", None)
+            if bbox is not None and grid.size > 0:
+                rows = grid.shape[1]
+                if rows > 0:
+                    origin_x = float(bbox[0][0]) - 2.0 * inflate
+                    origin_y = float(bbox[0][1]) - 2.0 * inflate + (rows - 1) * square_size
             wavefront_frame = WavefrontFrame(
                 grid=grid,
-                square_size_mm=float(getattr(wf, "square_size", 5.0)),
+                square_size_mm=square_size,
                 goal_marker=int(getattr(WaveFront, "goal_marker", 2**31 - 1)),
                 max_value=max_value,
+                origin_x=origin_x,
+                origin_y=origin_y,
             )
 
         bounds = Bounds.from_points(bounds_x, bounds_y)

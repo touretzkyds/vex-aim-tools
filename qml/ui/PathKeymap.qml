@@ -45,11 +45,11 @@ Item {
             centerView();
             event.accepted = true;
             break;
-        case Qt.Key_Less:
+        case Qt.Key_Greater:
             viewZoom(1 / zoomFactor);
             event.accepted = true;
             break;
-        case Qt.Key_Greater:
+        case Qt.Key_Less:
             viewZoom(zoomFactor);
             event.accepted = true;
             break;

@@ -14,7 +14,7 @@ import vex
 from . import evbase
 from .base import *
 from .events import *
-from .geometry import wrap_angle
+from .geometry import Distance, Angle, wrap_angle
 from .worldmap import WorldObject
 
 #________________ Ordinary Nodes ________________
@@ -165,7 +165,20 @@ class GPTOneShot(StateNode):
         self.robot.gpt_oneshot(self.query_text, self.image)
 
 
+class TagDetection(StateNode):
+    def __init__(self, enabled=True):
+        super().__init__()
+        self.enabled = enabled
+
+    def start(self, event=None):
+        super().start(event)
+        self.robot.robot0.vision.tag_detection(self.enabled)
+        self.post_completion()
+
+
 #________________ Actions ________________
+
+# Actions are implemented by the robot's actuators.
 
 class AbortAllActions(StateNode):
     def start(self,event=None):
@@ -189,49 +202,46 @@ class ActionNode(StateNode):
 
 
 class Forward(ActionNode):
-    def __init__(self, distance_mm=0, drive_speed=None):
+    def __init__(self, distance_mm=0.0, drive_speed=None):
         super().__init__()
-        self.distance_mm = distance_mm
+        self.distance_mm = float(distance_mm)
         self.drive_speed = drive_speed
     
     def start(self, event=None):
-        if isinstance(event,DataEvent) and isinstance(event.data, (int,float)) and \
-           not isinstance(event.data, bool):  # True and False are also ints
-            self.distance_mm = event.data
+        if isinstance(event,DataEvent) and isinstance(event.data, Distance):
+            self.distance_mm = event.data.value
         super().start(event)
         self.robot.actuators['drive'].forward(self, self.distance_mm, self.drive_speed)
 
 
 class Sideways(ActionNode):
-    def __init__(self, distance_mm=0, drive_speed=None):
+    def __init__(self, distance_mm=0.0, drive_speed=None):
         super().__init__()
         self.distance_mm = distance_mm
         self.drive_speed = drive_speed
     
     def start(self, event=None):
-        if isinstance(event,DataEvent) and isinstance(event.data, (int,float)) and \
-           not isinstance(event.data, bool):
-            self.distance_mm = event.data
+        if isinstance(event,DataEvent) and isinstance(event.data, Distance):
+            self.distance_mm = event.data.value
         super().start(event)
         self.robot.actuators['drive'].sideways(self, self.distance_mm, self.drive_speed)
 
 
 class Turn(ActionNode):
-    def __init__(self, angle_deg=0, turn_speed=None):
+    def __init__(self, angle_deg=0.0, turn_speed=None):
         super().__init__()
         self.angle_deg = angle_deg
         self.turn_speed = turn_speed
 
     def start(self, event=None):
-        if isinstance(event,DataEvent) and isinstance(event.data, (int,float)) and \
-           not isinstance(event.data, bool):
-            self.angle_deg = event.data
+        if isinstance(event,DataEvent) and isinstance(event.data, Angle):
+            self.angle_deg = event.data.degrees
         super().start(event)
         self.robot.actuators['drive'].turn(self, self.angle_deg*pi/180, self.turn_speed)
 
 
 class MoveFor(ActionNode):
-    def __init__(self, distance_mm=0, angle_deg=0, drive_speed=None):
+    def __init__(self, distance_mm=0.0, angle_deg=0.0, drive_speed=None):
         super().__init__()
         self.distance_mm = distance_mm
         self.angle_deg = angle_deg
@@ -271,6 +281,21 @@ class MoveWithVectors(ActionNode):
     def start(self, event=None):
         super().start(event)
         self.robot.actuators['drive'].move_with_vectors(self, self.xvel, self.yvel, self.rvel)
+
+class DriveArc(ActionNode):
+    def __init__(self, radius, angle=None, distance=None, speed=1.0):
+        super().__init__()
+        self.radius = radius
+        self.distance = distance
+        self.angle = angle
+        self.speed = speed
+
+    def start(self, event=None):
+        super().start(event)
+        self.robot.actuators['drive'].drive_arc(self, self.radius, self.angle,
+                                                self.distance, self.speed)
+        # for debugging
+        self.arc_program = self.robot.actuators['drive'].arc_program
 
 
 class SpinWheels(ActionNode):
@@ -363,6 +388,23 @@ class SoftKick(ActionNode):
     def start(self, event=None):
         super().start(event)
         self.robot.actuators['kick'].kick(self, vex.KickType.SOFT)
+
+class MediumKick(ActionNode):
+    def __init__(self):
+        super().__init__()
+
+    def start(self, event=None):
+        super().start(event)
+        self.robot.actuators['kick'].kick(self, vex.KickType.MEDIUM)
+
+
+class HardKick(ActionNode):
+    def __init__(self):
+        super().__init__()
+
+    def start(self, event=None):
+        super().start(event)
+        self.robot.actuators['kick'].kick(self, vex.KickType.HARD)
 
 
 class PlaceKick(ActionNode):

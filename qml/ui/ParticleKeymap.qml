@@ -15,6 +15,7 @@ Item {
     signal driveForward(real distance)
     signal strafe(real distance)
     signal turn(real angleDeg)
+    signal drop()
 
     signal evaluateParticles()
     signal resampleParticles()
@@ -68,6 +69,12 @@ Item {
         case Qt.Key_D:
             turn(-(shift ? rotateStepLarge : rotateStepSmall))
             event.accepted = true
+            break
+        case Qt.Key_G:
+            if (shift) {
+            } else {
+                drop()
+            }
             break
         case Qt.Key_E:
             evaluateParticles()
@@ -145,13 +152,11 @@ Item {
             pan(-1, 0)
             event.accepted = true
             break
-        case Qt.Key_Plus:
-        case Qt.Key_Equal:
+        case Qt.Key_Greater:
             viewZoom(1 / zoomFactor)
             event.accepted = true
             break
-        case Qt.Key_Minus:
-        case Qt.Key_Underscore:
+        case Qt.Key_Less:
             viewZoom(zoomFactor)
             event.accepted = true
             break

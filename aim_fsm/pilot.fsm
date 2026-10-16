@@ -1,7 +1,9 @@
 import math
+from math import nan, sqrt
 import time
 import sys
 import asyncio
+import copy
 
 from .base import *
 from .utils import Pose
@@ -142,24 +144,31 @@ class PilotBase(StateNode):
                 step = self.parent.navplan.steps[self.parent.index]
                 target_heading = step.param
                 self.angle_deg = wrap_angle(target_heading - self.robot.pose.theta) * 180/pi
-                print(f'ExecuteTurnTo: target heading = {neaten(target_heading*180/pi)} deg., ' +
-                      f'current heading = {neaten(self.robot.pose.theta*180/pi)} deg., ' +
-                      f'turn angle = {neaten(self.angle_deg)} .deg')
+                print(f'ExecuteTurnTo: target heading = {target_heading*180/pi:.1f} deg., ' +
+                      f'current heading = {self.robot.pose.theta*180/pi:.1f} deg., ' +
+                      f'turn angle = {self.angle_deg:.1f} .deg')
                 super().start(event)
 
 
         class ExecuteDoorPass(StateNode):
             """ Greasy hack to get around circular dependency between Pilot and DoorPass """
             def start(self, event=None):
-                dummy_doorpass = self.children['doorpass']
-                import copy
-                global pilot_global_doorpass_node  # set up in simple_cli
-                new_doorpass = copy.copy(pilot_global_doorpass_node)
-                new_doorpass.parent = dummy_doorpass.parent
-                new_doorpass.transitions = dummy_doorpass.transitions
-                self.children['doorpass'] = new_doorpass
-                self.start_node = new_doorpass
-
+                original_doorpass = self.children['doorpass']
+                print(f'{original_doorpass=}')
+                if not isinstance(original_doorpass, DoorPass):
+                    global pilot_global_doorpass_node  # set up in simple_cli
+                    new_doorpass = copy.copy(pilot_global_doorpass_node)
+                    print(f'{new_doorpass=}')
+                    new_doorpass.parent = original_doorpass.parent
+                    new_doorpass.transitions = original_doorpass.transitions
+                    for t in new_doorpass.transitions:
+                        t.sources = [new_doorpass]
+                    new_doorpass.children = dict()
+                    new_doorpass.setup()
+                    new_doorpass.start_node = new_doorpass.children[pilot_global_doorpass_node.start_node.name]
+                    self.children['doorpass'] = new_doorpass
+                    self.start_node = new_doorpass
+                    print(f'{new_doorpass=}')
                 step = self.parent.navplan.steps[self.parent.index]
                 self.children['doorpass'].door_spec = step.param
                 super().start()
@@ -294,6 +303,7 @@ class PilotToObject(PilotBase):
 
         #planner: PathPlannerProcess() =D=> recv
         planner: PathPlanToObject() =D=> recv
+        planner =C=> ParentCompletes() # already close enough
         planner =PILOT=> ParentPilotEvent() =N=> Print('Path planner failed')
 
         recv: self.ReceivePlan() =D=> exec
@@ -327,8 +337,8 @@ class PilotToPose(PilotBase):
         if isinstance(event, DataEvent):
             if isinstance(event.data, WorldObject):
                 self.target_object = event.data
-                self.target_pose = event.data.pose
-                self.target_pose.theta = math.nan
+                self.target_pose = copy.copy(event.data.pose)
+                self.target_pose.theta = nan
             elif isinstance(event.data, Pose):
                 self.target_object = None
                 self.target_pose = event.data
@@ -338,8 +348,7 @@ class PilotToPose(PilotBase):
         super().start(event)
 
     class PilotRRTPlanner(StateNode):
-        def planner(self,start_node,goal_node):
-            return self.robot.rrt.plan_path(start_node, goal_node, goal_object=self.parent.target_object)
+        MIN_DISTANCE_THRESHOLD = 10 # mm
 
         def start(self,event=None):
             super().start(event)
@@ -355,12 +364,19 @@ class PilotToPose(PilotBase):
                 self.parent.post_failure()
                 return
             pose = self.robot.pose
+            distance = sqrt((tpose.x - pose.x)**2 + (tpose.y - pose.y)**2)
+            if distance <= self.MIN_DISTANCE_THRESHOLD:
+                print(f'PilotRRTPlanner: distance {distance:.1f} mm already close enough')
+                self.post_completion()
+                return
+            else:
+                print(f'PilotRRTPlanner: {distance = :.1f} mm')
             start_node = RRTNode(x=pose.x, y=pose.y, q=pose.theta)
             goal_node = RRTNode(x=tpose.x, y=tpose.y, q=tpose.theta)
 
             start_escape_move = None
             try:
-                (treeA, treeB, path) = self.planner(start_node, goal_node)
+                (treeA, treeB, path) = self.rrt_plan(start_node, goal_node)
 
             except StartCollides as e:
                 # See if we can escape the start collision using canned headings.
@@ -389,7 +405,7 @@ class PilotToPose(PilotBase):
                     self.parent.post_failure()
                     return
                 try:
-                    (treeA, treeB, path) = self.planner(start_node, goal_node)
+                    (treeA, treeB, path) = self.rrt_plan(start_node, goal_node)
                 except GoalCollides as e:
                     print('PilotRRTPlanner: Goal collides!',e)
                     self.parent.post_event(PilotEvent(GoalCollides, args=e.args))
@@ -458,12 +474,19 @@ class PilotToPose(PilotBase):
             goal_node = RRTNode(x=gate[0], y=gate[1], q=gate[2])
             print('new goal is', goal_node)
             try:
-                (_, _, path) = self.planner(start_node, goal_node)
+                (_, _, path) = self.rrt_plan(start_node, goal_node)
             except Exception as e:
                 print('Pilot replanning for door gateway failed!', e.args)
             navplan = PathPlanner.from_path(path, [])
             navplan.steps.append(last_step)  # Add the doorpass step
             self.post_data((navplan,grid_display))
+
+        def rrt_plan(self,start_node,goal_node):
+            self.robot.rrt.generate_obstacles(self.parent.target_object,
+                                              PathPlanner.skinny_obstacle_inflation,
+                                              PathPlanner.skinny_wall_inflation,
+                                              PathPlanner.skinny_doorway_adjustment)
+            return self.robot.rrt.plan_path(start_node, goal_node, goal_object=self.parent.target_object)
 
         # ----- End of PilotRRTPlanner -----
 
@@ -471,7 +494,8 @@ class PilotToPose(PilotBase):
         def start(self, event=None):
             super().start(event)
             pose_diff = self.robot.pose - self.parent.target_pose
-            distance = (pose_diff.x**2 + pose_diff.y**2) ** 0.5
+            distance = sqrt(pose_diff.x**2 + pose_diff.y**2)
+            print(f'{distance=}  {pose_diff=}')
             MAX_TARGET_DISTANCE = 50.0 # mm
             if distance <= MAX_TARGET_DISTANCE:
                 self.post_success()
@@ -485,6 +509,7 @@ class PilotToPose(PilotBase):
         launch: self.ClearDisplays() =N=> planner
 
         planner: self.PilotRRTPlanner() =D=> recv
+        planner =C=> ParentCompletes()  # already close enough
         planner =PILOT=> ParentPilotEvent() =N=> Print('Path planner failed')
 
         recv: self.ReceivePlan() =D=> exec
@@ -504,7 +529,7 @@ class PilotPushToPose(PilotToPose):
         super().__init__(pose)
         self.max_turn = 20*(pi/180)
 
-    def planner(self,start_node,goal_node):
+    def rrt_plan(self,start_node,goal_node):
         self.robot.rrt.step_size=20
         return self.robot.rrt.plan_push_chip(start_node,goal_node)
 
@@ -552,9 +577,9 @@ class PilotFrustration(StateNode):
         done: ParentCompletes()
     }
 
-pilot_global_doorpass_node = "Will be filled in by simple_cli due to circularity"
-
 # ================ DoorPass ================
+
+pilot_global_doorpass_node = "Will be filled in by simple_cli due to circularity"
 
 class DoorPass(StateNode):
     """Pass through a doorway. Assumes the doorway is nearby and unobstructed."""
@@ -740,8 +765,8 @@ class DoorPass(StateNode):
             dy = door_pose.y - robot_pose.y
             vec = aboutZ(robot_pose.theta).dot(point(dx,dy))
             self.distance_mm = vec[1,0]
-            print(f'dpose={door_pose} rpose={robot_pose} dx={neaten(dx)} dy={neaten(dy)}' +
-                  f' vec={neaten(vec[0,0])},{neaten(vec[1,0])} dist={neaten(self.distance_mm)}')
+            print(f'dpose={door_pose} rpose={robot_pose} dx={dx:.1f} dy={dy:.1f}' +
+                  f' vec={vec[0,0]:.1f},{vec[1,0]:.1f} dist={self.distance_mm:.1f}')
             super().start(event)
         
 

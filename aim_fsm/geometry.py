@@ -9,6 +9,47 @@ from math import sin, cos, tan, pi, atan2, asin, sqrt, floor, ceil
 from fractions import Fraction
 import copy
 
+# Distance and Angle classes for motion nodes
+
+class Distance():
+    def __init__(self, mm=0.0):
+        super().__init__()
+        self.value = float(mm)
+
+    def __float__(self):
+        return self.value
+
+    def __repr__(self):
+        return f'Distance(mm={self.value:g})'
+
+class Angle():
+    def __init__(self, radians=None, degrees=None):
+        super().__init__()
+        if radians is not None:
+            if degrees is not None:
+                raise ValueError('Cannot specify both degrees and radians.')
+            else:
+                self.value = float(radians)
+        elif degrees is not None:
+            self.value = degrees / 180 * pi
+        else:
+            self.value = 0.0
+
+    def __float__(self):
+        return self.value
+
+    def __repr__(self):
+        return f'Angle(radians={self.value:g})'
+
+    @property
+    def radians(self):
+        return self.value
+
+    @property
+    def degrees(self):
+        return self.value / pi * 180
+
+
 def point(x=0, y=0, z=0, s=1):
     return np.array([ [x], [y], [z], [s] ])
 
@@ -143,8 +184,142 @@ def rotate_point(point, center, angle):
 
 #---------------- Quaternions ----------------
 
-def quat2rot(q0,q1,q2,q3):
+class Quaternion:
+    "Code based on cozmo-python-sdk/src/cozmo/util.py"
+
+    __slots__ = ('_q0', '_q1', '_q2', '_q3')
+
+    def __init__(self, q0=None, q1=None, q2=None, q3=None, angle_z=None):
+        is_quaternion = not (q0 is None) and not (q1 is None) and not (q2 is None) and not (q3 is None)
+
+        if not is_quaternion and angle_z is None:
+            raise ValueError("Expected either the q0 q1 q2 and q3 or angle_z keyword arguments")
+        if is_quaternion and angle_z:
+            raise ValueError("Expected either the q0 q1 q2 and q3 or angle_z keyword argument, not both")
+        if angle_z is not None:
+            if not isinstance(angle_z, (int,float)):
+                raise TypeError("Unsupported type for angle_z expected Angle")
+            q0, q1, q2, q3 = cos(angle_z/2), 0, 0, sin(angle_z/2)
+
+        self._q0, self._q1, self._q2, self._q3 = q0, q1, q2, q3
+
+    def __repr__(self):
+        return ("<%s q0: %.2f q1: %.2f q2: %.2f q3: %.2f (angle_z: %s)>" %
+            (self.__class__.__name__, self.q0, self.q1, self.q2, self.q3, self.angle_z))
+
+    def to_matrix(self, pos_x=0.0, pos_y=0.0, pos_z=0.0):
+        """Convert the Quaternion to a 4x4 matrix representing this rotation.
+
+        A position can also be provided to generate a full translation matrix.
+
+        Args:
+            pos_x (float): The x component for the position.
+            pos_y (float): The y component for the position.
+            pos_z (float): The z component for the position.
+
+        Returns:
+            4x4 transform matrix using homogeneous coordinates.
+        """
+        # See https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation
+        q0q0 = self.q0 * self.q0
+        q1q1 = self.q1 * self.q1
+        q2q2 = self.q2 * self.q2
+        q3q3 = self.q3 * self.q3
+
+        q0x2 = self.q0 * 2.0  # saves 2 multiplies
+        q0q1x2 = q0x2 * self.q1
+        q0q2x2 = q0x2 * self.q2
+        q0q3x2 = q0x2 * self.q3
+        q1x2 = self.q1 * 2.0  # saves 1 multiply
+        q1q2x2 = q1x2 * self.q2
+        q1q3x2 = q1x2 * self.q3
+        q2q3x2 = 2.0 * self.q2 * self.q3
+
+        m00 = (q0q0 + q1q1 - q2q2 - q3q3)
+        m01 = (q1q2x2 + q0q3x2)
+        m02 = (q1q3x2 - q0q2x2)
+
+        m10 = (q1q2x2 - q0q3x2)
+        m11 = (q0q0 - q1q1 + q2q2 - q3q3)
+        m12 = (q0q1x2 + q2q3x2)
+
+        m20 = (q0q2x2 + q1q3x2)
+        m21 = (q2q3x2 - q0q1x2)
+        m22 = (q0q0 - q1q1 - q2q2 + q3q3)
+
+        return np.array([[m00, m10, m20, pos_x],
+                         [m01, m11, m21, pos_y],
+                         [m02, m12, m22, pos_z],
+                         [0.0, 0.0, 0.0, 1.0  ]])
+
+    def __add__(self, other):
+        if not isinstance(other, Quaternion):
+            raise TypeError("Unsupported operand for + expected Quaternion")
+        return Quaternion(self._q0 + other._q0,
+                          self._q1 + other._q1,
+                          self._q2 + other._q2,
+                          self._q3 + other._q3)
+
+    def __sub__(self, other):
+        if not isinstance(other, Quaternion):
+            raise TypeError("Unsupported operand for Quaternion subtraction")
+        return Quaternion(self._q0 - other._q0,
+                          self._q1 - other._q1,
+                          self._q2 - other._q2,
+                          self._q3 - other._q3)
+
+    def __mul__(self, other):
+        if isinstance(other, (int,float)):
+            return Quaternion(self._q0 * other,
+                              self._q1 * other,
+                              self._q2 * other,
+                              self._q3 * other)
+        elif isinstance(other,Quaternion):
+            q0,q1,q2,q3 = self.q0_q1_q2_q3
+            r0,r1,r2,r3 = other.q0_q1_q2_q3
+            return Quaternion(q0*r0 - q1*r1 - q2*r2 - q3*r3,
+                              q0*r1 + q1*r0 + q2*r3 - q3*r2,
+                              q0*r2 - q1*r3 + q2*r0 + q3*r1,
+                              q0*r3 + q1*r2 - q2*r1 + q3*r0)
+        else:
+            raise TypeError("Unsupported operand for Quaternion multiplication")            
+
+    @property
+    def q0(self):
+        '''float: The q0 (w) value of the quaternion.'''
+        return self._q0
+
+    @property
+    def q1(self):
+        '''float: The q1 (i) value of the quaternion.'''
+        return self._q1
+
+    @property
+    def q2(self):
+        '''float: The q2 (j) value of the quaternion.'''
+        return self._q2
+
+    @property
+    def q3(self):
+        '''float: The q3 (k) value of the quaternion.'''
+        return self._q3
+
+    @property
+    def q0_q1_q2_q3(self):
+        '''tuple of float: Contains all elements of the quaternion (q0,q1,q2,q3)'''
+        return self._q0,self._q1,self._q2,self._q3
+
+    @property
+    def angle_z(self):
+        '''
+        Defined as the rotation in the z axis.
+        '''
+        q0,q1,q2,q3 = self.q0_q1_q2_q3
+        return atan2(2*(q1*q2+q0*q3), 1-2*(q2**2+q3**2))
+
+def quat2rot(quaternion):
     # formula from http://stackoverflow.com/questions/7938373/from-quaternions-to-opengl-rotations
+    q0,q1,q2,q3 = quaternion.q0_q1_q2_q3
     q0_sq = q0*q0; q1_sq = q1*q1; q2_sq = q2*q2; q3_sq = q3*q3
     t_q0q1 = 2. * q0 * q1
     t_q0q2 = 2. * q0 * q2
@@ -158,8 +333,9 @@ def quat2rot(q0,q1,q2,q3):
         [ t_q1q3-t_q0q2,           t_q2q3+t_q0q1,           q0_sq-q1_sq-q2_sq+q3_sq, 0. ],
         [             0.,                     0.,                      0.,           1.  ]])
 
-def quat2rot33(q0,q1,q2,q3):
+def quat2rot33(quaternion):
     # formula from http://stackoverflow.com/questions/7938373/from-quaternions-to-opengl-rotations
+    q0,q1,q2,q3 = quaternion.q0_q1_q2_q3
     q0_sq = q0*q0; q1_sq = q1*q1; q2_sq = q2*q2; q3_sq = q3*q3
     t_q0q1 = 2. * q0 * q1
     t_q0q2 = 2. * q0 * q2
@@ -175,7 +351,7 @@ def quat2rot33(q0,q1,q2,q3):
 
 def quaternion_to_euler_angle(quaternion):
     # source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles
-    w, x, y, z = quaternion
+    w, x, y, z = quaternion.q0_q1_q2_q3
     t0 = +2.0 * (w * x + y * z)
     t1 = +1.0 - 2.0 * (x * x + y * y)
     X = atan2(t0, t1)
@@ -354,6 +530,20 @@ def rotation_matrix_to_euler_angles(R):
     return np.array([x, y, z])
 
 
+def polygon_edge_points(poly, spacing=2):
+    "Return a list of points along the edges of a polygon."
+    points = []
+    for edge in poly.edges:
+        pt1 = edge[0]
+        pt2 = edge[1]
+        point_range = pt2 - pt1
+        maxdiv = float(abs(point_range).max())
+        steps = round(maxdiv / spacing)
+        for i in range(steps):
+            pt = pt1 + (i/steps)*point_range
+            points.append([int(pt[0,0]), int(pt[1,0])])
+    return points
+
 def polygon_fill(polygon, offset):
     """
     Implement the scanline polygon fill algorithm
@@ -375,6 +565,7 @@ def polygon_fill(polygon, offset):
     edges = polygon.edges
     ((xmin,ymin), (xmax,ymax)) = polygon.get_bounding_box()
     xmin, ymin, xmax, ymax = floor(xmin), floor(ymin), ceil(xmax), ceil(ymax)
+    print(f'polygon_fill: {xmin=} {ymin=} {xmax=} {ymax=}')
     xdelta = abs(xmin) if xmin < 0 else 0
     xmin += xdelta
     xmax += xdelta

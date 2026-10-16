@@ -150,6 +150,8 @@ class StateNode(EventListener):
         # 'program' is inserted into this module by __init__ to avoid circular importing
         if not program.running_fsm.running:
             print('Restarting StateMachineProgram')
+            program.running_fsm.children = dict()
+            program.running_fsm.start_node = None
             program.running_fsm.start()
         program.running_fsm.children[self.name] = self
         self.robot.loop.call_soon_threadsafe(self.start)
@@ -249,9 +251,9 @@ class Transition(EventListener):
             return
         else:
             self.handle = None
-        parent = self.sources[0].parent
+        parent = self.sources[0].parent  # all sources should have the same parent
         if not parent.running:
-            # print('@ @ @ @ @ PARENT OF', self, 'IS', parent, 'IS DEAD!  event=', event, '%x' % event.__hash__())
+            print('@ @ @ @ @ PARENT OF', self, 'IS', parent, 'IS DEAD!  event=', event, '%x' % event.__hash__())
             return
         for dest in self.destinations:
             if TRACE.trace_level >= TRACE.transition_fire:
