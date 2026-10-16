@@ -16,8 +16,27 @@ from .evbase import Event
 from .events import SpeechEvent
 
 
+LISTENER_PORT = 51327
+ALLOWED_HOSTS = {'127.0.0.1:%d' % LISTENER_PORT, 'localhost:%d' % LISTENER_PORT}
+ALLOWED_ORIGINS = {'http://' + host for host in ALLOWED_HOSTS}
+
 app = Flask('VEX AIM Speech Listener')
-CORS(app)  # This will enable CORS for all routes
+# Only our own page may read responses (127.0.0.1 and localhost count as
+# different origins, so both are listed).
+CORS(app, origins=list(ALLOWED_ORIGINS))
+
+@app.before_request
+def reject_foreign_requests():
+    # CORS only stops other sites from reading responses; browsers still send
+    # simple cross-site POSTs (e.g. reset-fsm, file uploads).  So refuse any
+    # request a browser marks as coming from another origin, and any request
+    # addressed to another host name (DNS rebinding).  Requests without an
+    # Origin header come from same-origin GETs or local non-browser tools.
+    if request.host not in ALLOWED_HOSTS:
+        return jsonify({'status': 'error', 'error': 'forbidden host'}), 403
+    origin = request.headers.get('Origin')
+    if origin is not None and origin not in ALLOWED_ORIGINS:
+        return jsonify({'status': 'error', 'error': 'forbidden origin'}), 403
 
 session_id = None
 
@@ -83,12 +102,16 @@ def handle_get_session_id():
 
 @app.route('/api/reset-fsm', methods=['POST'])
 def handle_reset_fsm():
-    global running_fsm
+    global robot
     print('Resetting state machine...')
     add_to_transcript('Resetting state machine...')
-    this_dir = os.path.dirname(os.path.abspath(__file__))
-    media_path = os.path.abspath(os.path.join(this_dir, '..', 'media', 'reset_fsm.mp3'))
-    playsound(media_path)
+    # The state machine belongs to the robot's event loop, so reset it there.
+    robot.loop.call_soon_threadsafe(reset_fsm)
+    return jsonify({'status': 'ok'})
+
+def reset_fsm():
+    # Runs on the robot's event loop.
+    global running_fsm
     for child in running_fsm.children.values():
         child.stop()
     if 'reset_fsm' in running_fsm.children:
@@ -97,12 +120,22 @@ def handle_reset_fsm():
         running_fsm.start_node.start()
     else:
         pass
-    return jsonify({'status': 'ok'})
+    # Play the sound after stopping, without waiting for it to finish.
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    media_path = os.path.abspath(os.path.join(this_dir, '..', 'media', 'reset_fsm.mp3'))
+    playsound(media_path, block=False)
 
 
 DOCUMENT_MAX_BYTES = 200 * 1024 * 1024
 app.config['MAX_CONTENT_LENGTH'] = DOCUMENT_MAX_BYTES
 DOCUMENT_TEXT_MAX_BYTES = 200 * 1024  # text documents are re-sent to the LLM every turn
+
+@app.errorhandler(413)
+def handle_too_large(exc):
+    # Flask rejects bodies over MAX_CONTENT_LENGTH before any route runs;
+    # reply in JSON so the page can show a readable message.
+    return jsonify({'status': 'error',
+                    'error': 'file is larger than %d MB' % (DOCUMENT_MAX_BYTES // (1024 * 1024))}), 413
 
 @app.route('/api/upload-script', methods=['POST'])
 def handle_upload_script():
@@ -110,17 +143,18 @@ def handle_upload_script():
     file = request.files.get('file')
     if file is None or file.filename == '':
         return jsonify({'status': 'error', 'error': 'no file'}), 400
+    if getattr(robot, 'openai_client', None) is None:
+        return jsonify({'status': 'error', 'error': 'no OpenAI client is configured'}), 503
 
-    data = file.read(DOCUMENT_MAX_BYTES + 1)
-    if len(data) > DOCUMENT_MAX_BYTES:
-        return jsonify({'status': 'error',
-                        'error': 'file is larger than %d MB' % (DOCUMENT_MAX_BYTES // (1024 * 1024))}), 400
+    data = file.read()  # size already capped by MAX_CONTENT_LENGTH
     try:
         document = prepare_document(file.filename, data, DOCUMENT_TEXT_MAX_BYTES)
     except DocumentError as exc:
         return jsonify({'status': 'error', 'error': str(exc)}), 400
 
     if document.kind == 'pdf':
+        # attach_pdf blocks (possibly for minutes) and doesn't touch
+        # event-loop state, so it runs here on the Flask thread.
         try:
             robot.openai_client.attach_pdf(document.saved_name, document.data)
         except Exception as exc:
@@ -171,17 +205,18 @@ class SpeechListener():
         self.debug = debug
         self.enabled = True
         self.paused = False  # speaking pauses the listener
-        self.utterance_queue = []  # list of tuples of form (time, string)
+        self.utterance_queue = []  # list of entries of form [time, string, words]
+        self.utterance_queue_lock = threading.Lock()
 
     def run_flask(self):
         # Suppress the default Flask logging
         log = logging.getLogger('werkzeug')
         log.setLevel(logging.ERROR)
         # Debug must be false to prevent duplicate tab:
-        app.run(port=51327, debug=False, use_reloader=False, threaded=True)
+        app.run(port=LISTENER_PORT, debug=False, use_reloader=False, threaded=True)
 
     def load_listener_page(self):
-        webbrowser.open_new_tab('http://127.0.0.1:51327/')
+        webbrowser.open_new_tab('http://127.0.0.1:%d/' % LISTENER_PORT)
         print('Speech input is running in your browser.')
 
     def disable(self):
@@ -220,26 +255,46 @@ class SpeechListener():
         if self.confirmation_bell:
             this_dir = os.path.dirname(os.path.abspath(__file__))
             media_path = os.path.abspath(os.path.join(this_dir, '..', 'media', 'acknowledge4.mp3'))
+            # A non-blocking playsound() goes silent when the thread that
+            # started it exits, and this Flask request thread exits right
+            # away.  So play the sound with a blocking call.
             playsound(media_path)
+            # Alternativee:  play the sound with blocking on a thread of its own:
+            #threading.Thread(target=playsound, args=(media_path,), daemon=True).start()
         self.append_utterance_queue(string, words)
+        # We're on a Flask request thread; the event router belongs to the
+        # robot's event loop, so do the delivery there.
+        self.robot.loop.call_soon_threadsafe(self.deliver_if_listening)
+
+    def deliver_if_listening(self):
+        # Runs on the robot's event loop.
         if self.robot.erouter.dispatch_table.get(SpeechEvent):
             self.pop_utterance_queue()
-        
+
     def append_utterance_queue(self, string, words):
-        self.utterance_queue.append([time.time(), string, words])
+        with self.utterance_queue_lock:
+            self.utterance_queue.append([time.time(), string, words])
 
     def pop_utterance_queue(self):
-        if not self.utterance_queue:
-            return
-        (creation_time, string, words) = self.utterance_queue.pop(0)
-        if time.time() - creation_time <= self.UTTERANCE_EXPIRATION_TIME:
-            print("Heard: '%s'" % string)
-            sys.stdout.flush()
-            add_to_transcript("Heard: '%s'" % string)
-            event = SpeechEvent(string, words)
-            self.robot.erouter.post(event)
-        else:  # entry was stale; try the next one
-            self.pop_utterance_queue()
+        # Runs on the robot's event loop, but Flask request threads append to
+        # the queue concurrently, so queue access is guarded by a lock.  The
+        # lock is released before posting the event so a handler can safely
+        # call back into the queue.
+        while True:
+            with self.utterance_queue_lock:
+                if not self.utterance_queue:
+                    return
+                (creation_time, string, words) = self.utterance_queue.pop(0)
+            if time.time() - creation_time <= self.UTTERANCE_EXPIRATION_TIME:
+                print("Heard: '%s'" % string)
+                sys.stdout.flush()
+                add_to_transcript("Heard: '%s'" % string)
+                event = SpeechEvent(string, words)
+                self.robot.erouter.post(event)
+                return
+            # entry was stale; try the next one
+            print("Discarded (timed out): '%s'" % string, flush=True)
+            add_to_transcript("Discarded (timed out): '%s'" % string)
 
     def start(self):
         if self.robot.flask_thread:

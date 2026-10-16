@@ -110,7 +110,7 @@ class StateMachineProgram(StateNode):
         elif particle_filter is None:
             self.particle_filter = \
                 SLAMParticleFilter(self.robot, num_particles=self.num_particles,
-                                   landmark_test=SLAMSensorModel.is_wall_landmark)
+                                   landmark_test=SLAMSensorModel.is_apriltag_landmark)
         elif particle_filter == False:
             self.particle_filter = None
         else:

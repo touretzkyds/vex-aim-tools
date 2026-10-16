@@ -430,9 +430,11 @@ class WorldMap():
                 continue
             obj.sensor_distance = distance
             if isinstance(obj, AprilTagObj):
+                obj.sensor_bearing = angle
                 tag_angle_correction_factor = 4  # guesstimate
                 angle = spec['angle'] - (0 if spec['angle'] < 180 else 360)
-                theta = wrap_angle(self.robot.pose.theta + pi - angle / 180 * pi * tag_angle_correction_factor)
+                obj.sensor_orient = wrap_angle(pi - angle / 180 * pi * tag_angle_correction_factor)
+                theta = wrap_angle(self.robot.pose.theta + obj.sensor_orient)
             else:
                 theta = None
             obj.pose = Pose(x, y, 0, theta)
@@ -1026,7 +1028,7 @@ class WorldMap():
     def get_prompt(self):
         with self._lock:
             prompt = ''
-            prompt += f'It is now {datetime.datetime.now().strftime("%B %d, %Y, %I:%M:%S %p")}.\n'
+            prompt += f'It is now {datetime.datetime.now().astimezone().strftime("%B %d, %Y, %I:%M:%S %p %Z")}.\n'
             if self.robot.particle_filter.state == self.robot.particle_filter.LOCALIZED:
                 prompt += f'You are located at ({round(self.robot.pose.x)}, {round(self.robot.pose.y)})\n'
                 prompt += f'Your heading is {round(self.robot.pose.theta*180/pi)} degrees\n'

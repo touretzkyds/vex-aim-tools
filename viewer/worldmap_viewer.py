@@ -148,7 +148,7 @@ class WorldMapViewer(QObject):
         self._view.show()
         self._focus_root()
         self.frame_scene()
-        print(WORLD_HELP_TEXT, end="")
+        #print(WORLD_HELP_TEXT, end="")
 
     def stop(self) -> None:
         self._timer.stop()

@@ -20,7 +20,7 @@ emoji_list = ', '.join([key.lower() for (key,value) in vars(vex.EmojiType).items
                         if isinstance(value, vex.EmojiType)])
 new_preamble = f"""
   # IDENTITY SECTION.
-  You are an intelligent mobile robot named Celeste.
+  You are an intelligent mobile robot named {CHARACTER_NAME}.
   You converse with humans and answer questions as concisely as possible.
   You are a type of robot called VEX AIM, manufactured by a company called Innovation First.
   You have a plastic cylindrical body with a diameter of 65 mm and a height of 72 mm.
@@ -230,6 +230,16 @@ new_preamble = f"""
   Do NOT claim to have real feelings, a consciousness, a secret life,
   or the ability to be a "secret friend". 
   Do not encourage children to keep secrets from adults.
+
+  # AUTONOMY SECTION.
+
+  When you receive the input "#autonomous" you are free to choose
+  actions or responses on your own instead of responding to the user
+  query.  Respond the same way as to a user query: with a series of
+  lines containing either text or a #-marked action.  You can also
+  decide not to say or do anything, in which case you must respond
+  "#noaction" without the quotes.
+
 """
 
 class Celeste(StateMachineProgram):
@@ -237,22 +247,26 @@ class Celeste(StateMachineProgram):
     SEARCH_FAIL_MSG = "I turned all the way around but could not find %s."
 
     def __init__(self):
+<<<<<<< HEAD
         self.stopped = False     # set when a failure ends the request
         self.retargeted = False  # a wrong object was already replaced in this request
         super().__init__(character_name="Celeste",
+=======
+        super().__init__(character_name=CHARACTER_NAME,
+>>>>>>> origin/devel
                          launch_cam_viewer=True,
                          launch_worldmap_viewer=True,
                          launch_particle_viewer=True,
                          launch_path_viewer=True)
 
-    def picked_up_celeste(self):
+    def picked_up_character(self):
         self.robot.gpt_note_for_later("You have been picked up.")
         # Carrying changes the view without advancing the wheel-motion marker.
         detector = self.robot.openvocab_detector
         if detector is not None:
             detector.invalidate()
 
-    def put_down_celeste(self):
+    def put_down_character(self):
         self.stop_children()
         self.robot.gpt_note_for_later("You were picked up but have now been put down.")
         # Put-down resets the coordinate frame used by open-vocabulary results.
@@ -263,6 +277,7 @@ class Celeste(StateMachineProgram):
 
     def start(self):
         self.robot.openai_client.set_preamble(new_preamble)
+<<<<<<< HEAD
         from aim_fsm.openvocab_shape import ShapeGenerator
         previous = getattr(self.robot, 'openvocab_shapes', None)
         if previous:
@@ -276,6 +291,10 @@ class Celeste(StateMachineProgram):
             self.robot.openvocab_detector.base_tolerance_480 = OPENVOCAB_BASE_TOLERANCE_PX
         self.picked_up_handler = self.picked_up_celeste
         self.put_down_handler = self.put_down_celeste
+=======
+        self.picked_up_handler = self.picked_up_character
+        self.put_down_handler = self.put_down_character
+>>>>>>> origin/devel
         super().start()
 
     def stop(self):
@@ -323,10 +342,15 @@ class Celeste(StateMachineProgram):
             # raw text lines to #say commands.
             if any((line.startswith('#') for line in lines)):
                 commands = [line if line.startswith('#') else ('#say ' + line) for line in lines]
+<<<<<<< HEAD
                 if self.parent.stopped:
                     commands = [c for c in commands if c.startswith('#say ')]
                 commands = self.target_commands(commands)
                 print(commands)
+=======
+                if commands != ["#noaction"]:
+                    print(commands)
+>>>>>>> origin/devel
                 self.post_data(commands)
             # else response is a pure string so just speak it in one gulp
             else:
@@ -344,7 +368,7 @@ class Celeste(StateMachineProgram):
             filename = event.data.split(' ')[1]
             if filename[-4:] != '.txt':
                 filename += ".txt"
-            path = Path.home() / "Documents" / "Celeste" / filename
+            path = Path.home() / "Documents" / CHARACTER_NAME / filename
             try:
                 contents = path.read_text(encoding="utf-8")
             except (OSError,UnicodeError) as e:
@@ -998,7 +1022,7 @@ class Celeste(StateMachineProgram):
             below the camera's view, so a rotating sweep can never see it
             (the usual cause: a pickup attempt just nudged it).  Post
             success to trigger a back-up that restores line of sight."""
-            CLOSE_MM = 150
+            CLOSE_MM = 60 # was 150
             def start(self, event=None):
                 super().start(event)
                 try:
@@ -1046,7 +1070,7 @@ class Celeste(StateMachineProgram):
             #             nearcheck =S=> backup
             #             nearcheck =F=> prior
             # 
-            #             backup: Forward(-100)
+            #             backup: Forward(-50) # Forward(-100)
             #             backup =C=> prior
             #             backup =F=> prior
             # 
@@ -1077,10 +1101,14 @@ class Celeste(StateMachineProgram):
             #             announce =C=> ParentCompletes()
             #             announce =F=> ParentCompletes()
             
+<<<<<<< HEAD
             # Code generated by genfsm on Fri Sep 25 22:11:14 2026:
+=======
+            # Code generated by genfsm on Thu Oct  8 14:53:06 2026:
+>>>>>>> origin/devel
             
             nearcheck = self.NearCheck() .set_name("nearcheck") .set_parent(self)
-            backup = Forward(-100) .set_name("backup") .set_parent(self)
+            backup = Forward(-50) .set_name("backup") .set_parent(self)
             prior = self.PriorTurn() .set_name("prior") .set_parent(self)
             check = self.CheckVisible() .set_name("check") .set_parent(self)
             parentfails10 = ParentFails() .set_name("parentfails10") .set_parent(self)
@@ -1151,7 +1179,11 @@ class Celeste(StateMachineProgram):
           #           drop =F=> ParentCompletes()
           #           drop =C=> ParentCompletes()
           
+<<<<<<< HEAD
           # Code generated by genfsm on Fri Sep 25 22:11:14 2026:
+=======
+          # Code generated by genfsm on Thu Oct  8 14:53:06 2026:
+>>>>>>> origin/devel
           
           drop = Drop() .set_name("drop") .set_parent(self)
           parentcompletes5 = ParentCompletes() .set_name("parentcompletes5") .set_parent(self)
@@ -1483,7 +1515,11 @@ class Celeste(StateMachineProgram):
             # 
             #             complete: ParentCompletes()
             
+<<<<<<< HEAD
             # Code generated by genfsm on Fri Sep 25 22:11:14 2026:
+=======
+            # Code generated by genfsm on Thu Oct  8 14:53:06 2026:
+>>>>>>> origin/devel
             
             dispatch = self.SendAction() .set_name("dispatch") .set_parent(self)
             acthappy1 = ActHappy() .set_name("acthappy1") .set_parent(self)
@@ -1539,13 +1575,19 @@ class Celeste(StateMachineProgram):
         super().start(event)
         
     def setup(self):
-        #         Print(f"Celeste version {CELESTE_VERSION}") =N=>
+        #         Print(f"{CHARACTER_NAME} version {CHARACTER_VERSION}") =N=>
         #           TagDetection(True) =T(2)=>
         #             Say("Talk to me") =C=> loop
         # 
         #         putdown: Say(["I'm good", "Okay then", "I'm back", "Now then"]) =C=> loop
         # 
+<<<<<<< HEAD
         #         loop: self.Idle() =Hear()=> AskGPT() =OpenAITrans()=> check
+=======
+        #         loop: StateNode()
+        #         loop =Hear()=> AskGPT() =OpenAITrans()=> check
+        #         loop =T(2)=> AskGPT("#autonomous") =OpenAITrans()=> check
+>>>>>>> origin/devel
         # 
         #         check: self.CheckResponse()
         #         check =D(list)=> dispatch
@@ -1556,6 +1598,7 @@ class Celeste(StateMachineProgram):
         #                         "I'm listening", "Let's go", "I'm back"]) =C=> loop
         # 
         #         dispatch: Iterate()
+        #         dispatch =D(re.compile('#noaction$'))=> StateNode() =Next=> dispatch
         #         dispatch =D(re.compile('#hang$'))=> self.CmdHang()
         #         dispatch =D(re.compile('#script '))=> script
         #         dispatch =D(re.compile('#say '))=> say
@@ -1672,20 +1715,28 @@ class Celeste(StateMachineProgram):
         #         search =F=> self.CmdFailed(self.SEARCH_FAIL_MSG, lambda : search.object_spec) =OpenAITrans()=> check
         # 
         
+<<<<<<< HEAD
         # Code generated by genfsm on Fri Sep 25 22:11:14 2026:
         
         print2 = Print(f"Celeste version {CELESTE_VERSION}") .set_name("print2") .set_parent(self)
+=======
+        # Code generated by genfsm on Thu Oct  8 14:53:06 2026:
+        
+        print1 = Print(f"{CHARACTER_NAME} version {CHARACTER_VERSION}") .set_name("print1") .set_parent(self)
+>>>>>>> origin/devel
         tagdetection1 = TagDetection(True) .set_name("tagdetection1") .set_parent(self)
         say5 = Say("Talk to me") .set_name("say5") .set_parent(self)
         putdown = Say(["I'm good", "Okay then", "I'm back", "Now then"]) .set_name("putdown") .set_parent(self)
         loop = self.Idle() .set_name("loop") .set_parent(self)
         askgpt1 = AskGPT() .set_name("askgpt1") .set_parent(self)
+        askgpt2 = AskGPT("#autonomous") .set_name("askgpt2") .set_parent(self)
         check = self.CheckResponse() .set_name("check") .set_parent(self)
         speakresponse1 = self.SpeakResponse() .set_name("speakresponse1") .set_parent(self)
         reset_fsm = Say(["I'm awake", "state machine reset", "I'm back on the job",
                         "I'm ready for you", "You have my attention",
                         "I'm listening", "Let's go", "I'm back"]) .set_name("reset_fsm") .set_parent(self)
         dispatch = Iterate() .set_name("dispatch") .set_parent(self)
+        statenode1 = StateNode() .set_name("statenode1") .set_parent(self)
         cmdhang1 = self.CmdHang() .set_name("cmdhang1") .set_parent(self)
         cmdforward1 = self.CmdForward() .set_name("cmdforward1") .set_parent(self)
         cmdsideways1 = self.CmdSideways() .set_name("cmdsideways1") .set_parent(self)
@@ -1728,6 +1779,7 @@ class Celeste(StateMachineProgram):
         cmdemoji1 = self.CmdEmoji() .set_name("cmdemoji1") .set_parent(self)
         cmdact1 = self.CmdAct() .set_name("cmdact1") .set_parent(self)
         cmdplaynotes1 = self.CmdPlayNotes() .set_name("cmdplaynotes1") .set_parent(self)
+<<<<<<< HEAD
         sendgptcamera1 = SendGPTCamera() .set_name("sendgptcamera1") .set_parent(self)
         askgpt2 = AskGPT("Please respond to the query using the camera image.") .set_name("askgpt2") .set_parent(self)
         print3 = Print(prefix='Unrecognized #-command: ') .set_name("print3") .set_parent(self)
@@ -1739,6 +1791,19 @@ class Celeste(StateMachineProgram):
         statenode8 = StateNode() .set_name("statenode8") .set_parent(self)
         turntoward = self.CmdTurnToward() .set_name("turntoward") .set_parent(self)
         statenode9 = StateNode() .set_name("statenode9") .set_parent(self)
+=======
+        cmdsendcamera1 = self.CmdSendCamera() .set_name("cmdsendcamera1") .set_parent(self)
+        askgpt3 = AskGPT("Please respond to the query using the camera image.") .set_name("askgpt3") .set_parent(self)
+        print2 = Print(prefix='Unrecognized #-command: ') .set_name("print2") .set_parent(self)
+        say = self.CmdSay() .set_name("say") .set_parent(self)
+        statenode2 = StateNode() .set_name("statenode2") .set_parent(self)
+        script = self.CmdScript() .set_name("script") .set_parent(self)
+        say2 = Say("Script loaded") .set_name("say2") .set_parent(self)
+        cmdfailed1 = self.CmdFailed("I am unable to load that file") .set_name("cmdfailed1") .set_parent(self)
+        statenode3 = StateNode() .set_name("statenode3") .set_parent(self)
+        turntoward = self.CmdTurnToward() .set_name("turntoward") .set_parent(self)
+        statenode4 = StateNode() .set_name("statenode4") .set_parent(self)
+>>>>>>> origin/devel
         pilottoobject = self.CmdPilotToObject() .set_name("pilottoobject") .set_parent(self)
         arrivalcheck = self.CheckArrival() .set_name("arrivalcheck") .set_parent(self)
         announcerelocation1 = self.AnnounceRelocation() .set_name("announcerelocation1") .set_parent(self)
@@ -1756,7 +1821,11 @@ class Celeste(StateMachineProgram):
         doorpass = self.CmdDoorPass() .set_name("doorpass") .set_parent(self)
         cmdfailed17 = self.CmdFailed("Doorpass failed for '%s'", lambda : doorpass.door_spec) .set_name("cmdfailed17") .set_parent(self)
         pickup = self.CmdPickup() .set_name("pickup") .set_parent(self)
+<<<<<<< HEAD
         statenode12 = StateNode() .set_name("statenode12") .set_parent(self)
+=======
+        statenode5 = StateNode() .set_name("statenode5") .set_parent(self)
+>>>>>>> origin/devel
         search = self.CmdSearch() .set_name("search") .set_parent(self)
         cmdfailed18 = self.CmdFailed(self.SEARCH_FAIL_MSG, lambda : search.object_spec) .set_name("cmdfailed18") .set_parent(self)
         
@@ -1778,8 +1847,19 @@ class Celeste(StateMachineProgram):
         openaitrans1 = OpenAITrans() .set_name("openaitrans1")
         openaitrans1 .add_sources(askgpt1) .add_destinations(check)
         
+<<<<<<< HEAD
         datatrans12 = DataTrans(list) .set_name("datatrans12")
         datatrans12 .add_sources(check) .add_destinations(dispatch)
+=======
+        timertrans4 = TimerTrans(2) .set_name("timertrans4")
+        timertrans4 .add_sources(loop) .add_destinations(askgpt2)
+        
+        openaitrans2 = OpenAITrans() .set_name("openaitrans2")
+        openaitrans2 .add_sources(askgpt2) .add_destinations(check)
+        
+        datatrans6 = DataTrans(list) .set_name("datatrans6")
+        datatrans6 .add_sources(check) .add_destinations(dispatch)
+>>>>>>> origin/devel
         
         datatrans13 = DataTrans(str) .set_name("datatrans13")
         datatrans13 .add_sources(check) .add_destinations(speakresponse1)
@@ -1790,6 +1870,7 @@ class Celeste(StateMachineProgram):
         completiontrans25 = CompletionTrans() .set_name("completiontrans25")
         completiontrans25 .add_sources(reset_fsm) .add_destinations(loop)
         
+<<<<<<< HEAD
         datatrans14 = DataTrans(re.compile('#hang$')) .set_name("datatrans14")
         datatrans14 .add_sources(dispatch) .add_destinations(cmdhang1)
         
@@ -1801,22 +1882,52 @@ class Celeste(StateMachineProgram):
         
         datatrans17 = DataTrans(re.compile('#forward ')) .set_name("datatrans17")
         datatrans17 .add_sources(dispatch) .add_destinations(cmdforward1)
+=======
+        datatrans8 = DataTrans(re.compile('#noaction$')) .set_name("datatrans8")
+        datatrans8 .add_sources(dispatch) .add_destinations(statenode1)
+        
+        nexttrans1 = NextTrans() .set_name("nexttrans1")
+        nexttrans1 .add_sources(statenode1) .add_destinations(dispatch)
+        
+        datatrans9 = DataTrans(re.compile('#hang$')) .set_name("datatrans9")
+        datatrans9 .add_sources(dispatch) .add_destinations(cmdhang1)
+        
+        datatrans10 = DataTrans(re.compile('#script ')) .set_name("datatrans10")
+        datatrans10 .add_sources(dispatch) .add_destinations(script)
+        
+        datatrans11 = DataTrans(re.compile('#say ')) .set_name("datatrans11")
+        datatrans11 .add_sources(dispatch) .add_destinations(say)
+        
+        datatrans12 = DataTrans(re.compile('#forward ')) .set_name("datatrans12")
+        datatrans12 .add_sources(dispatch) .add_destinations(cmdforward1)
+>>>>>>> origin/devel
         
         cnexttrans1 = CNextTrans() .set_name("cnexttrans1")
         cnexttrans1 .add_sources(cmdforward1) .add_destinations(dispatch)
         
+<<<<<<< HEAD
         datatrans18 = DataTrans(re.compile('#sideways ')) .set_name("datatrans18")
         datatrans18 .add_sources(dispatch) .add_destinations(cmdsideways1)
+=======
+        datatrans13 = DataTrans(re.compile('#sideways ')) .set_name("datatrans13")
+        datatrans13 .add_sources(dispatch) .add_destinations(cmdsideways1)
+>>>>>>> origin/devel
         
         cnexttrans2 = CNextTrans() .set_name("cnexttrans2")
         cnexttrans2 .add_sources(cmdsideways1) .add_destinations(dispatch)
         
+<<<<<<< HEAD
         datatrans19 = DataTrans(re.compile('#turn ')) .set_name("datatrans19")
         datatrans19 .add_sources(dispatch) .add_destinations(cmdturn1)
+=======
+        datatrans14 = DataTrans(re.compile('#turn ')) .set_name("datatrans14")
+        datatrans14 .add_sources(dispatch) .add_destinations(cmdturn1)
+>>>>>>> origin/devel
         
         cnexttrans3 = CNextTrans() .set_name("cnexttrans3")
         cnexttrans3 .add_sources(cmdturn1) .add_destinations(dispatch)
         
+<<<<<<< HEAD
         datatrans20 = DataTrans(re.compile('#turntoward ')) .set_name("datatrans20")
         datatrans20 .add_sources(dispatch) .add_destinations(turntoward)
         
@@ -1837,10 +1948,30 @@ class Celeste(StateMachineProgram):
         
         datatrans26 = DataTrans(re.compile('#rename ')) .set_name("datatrans26")
         datatrans26 .add_sources(dispatch) .add_destinations(rename)
+=======
+        datatrans15 = DataTrans(re.compile('#turntoward ')) .set_name("datatrans15")
+        datatrans15 .add_sources(dispatch) .add_destinations(turntoward)
+        
+        datatrans16 = DataTrans(re.compile('#search ')) .set_name("datatrans16")
+        datatrans16 .add_sources(dispatch) .add_destinations(search)
+        
+        datatrans17 = DataTrans(re.compile('#pilottoobject ')) .set_name("datatrans17")
+        datatrans17 .add_sources(dispatch) .add_destinations(pilottoobject)
+        
+        datatrans18 = DataTrans(re.compile('#doorpass ')) .set_name("datatrans18")
+        datatrans18 .add_sources(dispatch) .add_destinations(doorpass)
+        
+        datatrans19 = DataTrans(re.compile('#pickup ')) .set_name("datatrans19")
+        datatrans19 .add_sources(dispatch) .add_destinations(pickup)
+        
+        datatrans20 = DataTrans(re.compile('#drop$')) .set_name("datatrans20")
+        datatrans20 .add_sources(dispatch) .add_destinations(cmddrop1)
+>>>>>>> origin/devel
         
         cnexttrans4 = CNextTrans() .set_name("cnexttrans4")
         cnexttrans4 .add_sources(rename) .add_destinations(dispatch)
         
+<<<<<<< HEAD
         failuretrans14 = FailureTrans() .set_name("failuretrans14")
         failuretrans14 .add_sources(rename) .add_destinations(cmdfailed1)
         
@@ -1870,15 +2001,105 @@ class Celeste(StateMachineProgram):
         
         completiontrans26 = CompletionTrans() .set_name("completiontrans26")
         completiontrans26 .add_sources(say6) .add_destinations(findturn)
+=======
+        datatrans21 = DataTrans(re.compile('#kick$')) .set_name("datatrans21")
+        datatrans21 .add_sources(dispatch) .add_destinations(cmdkick1)
+        
+        cnexttrans5 = CNextTrans() .set_name("cnexttrans5")
+        cnexttrans5 .add_sources(cmdkick1) .add_destinations(dispatch)
+        
+        datatrans22 = DataTrans(re.compile('#glow ')) .set_name("datatrans22")
+        datatrans22 .add_sources(dispatch) .add_destinations(cmdglow1)
+        
+        cnexttrans6 = CNextTrans() .set_name("cnexttrans6")
+        cnexttrans6 .add_sources(cmdglow1) .add_destinations(dispatch)
+        
+        datatrans23 = DataTrans(re.compile('#flash ')) .set_name("datatrans23")
+        datatrans23 .add_sources(dispatch) .add_destinations(cmdflash1)
+        
+        cnexttrans7 = CNextTrans() .set_name("cnexttrans7")
+        cnexttrans7 .add_sources(cmdflash1) .add_destinations(dispatch)
+        
+        datatrans24 = DataTrans(re.compile('#emoji ')) .set_name("datatrans24")
+        datatrans24 .add_sources(dispatch) .add_destinations(cmdemoji1)
+        
+        cnexttrans8 = CNextTrans() .set_name("cnexttrans8")
+        cnexttrans8 .add_sources(cmdemoji1) .add_destinations(dispatch)
+        
+        datatrans25 = DataTrans(re.compile('#act ')) .set_name("datatrans25")
+        datatrans25 .add_sources(dispatch) .add_destinations(cmdact1)
+        
+        cnexttrans9 = CNextTrans() .set_name("cnexttrans9")
+        cnexttrans9 .add_sources(cmdact1) .add_destinations(dispatch)
+        
+        datatrans26 = DataTrans(re.compile('#playnotes ')) .set_name("datatrans26")
+        datatrans26 .add_sources(dispatch) .add_destinations(cmdplaynotes1)
+        
+        cnexttrans10 = CNextTrans() .set_name("cnexttrans10")
+        cnexttrans10 .add_sources(cmdplaynotes1) .add_destinations(dispatch)
+        
+        datatrans27 = DataTrans(re.compile('#camera$')) .set_name("datatrans27")
+        datatrans27 .add_sources(dispatch) .add_destinations(cmdsendcamera1)
+        
+        completiontrans17 = CompletionTrans() .set_name("completiontrans17")
+        completiontrans17 .add_sources(cmdsendcamera1) .add_destinations(askgpt3)
+        
+        openaitrans3 = OpenAITrans() .set_name("openaitrans3")
+        openaitrans3 .add_sources(askgpt3) .add_destinations(check)
+        
+        datatrans28 = DataTrans() .set_name("datatrans28")
+        datatrans28 .add_sources(dispatch) .add_destinations(print2)
+        
+        nexttrans2 = NextTrans() .set_name("nexttrans2")
+        nexttrans2 .add_sources(print2) .add_destinations(dispatch)
+        
+        completiontrans18 = CompletionTrans() .set_name("completiontrans18")
+        completiontrans18 .add_sources(dispatch) .add_destinations(loop)
+        
+        cnexttrans11 = CNextTrans() .set_name("cnexttrans11")
+        cnexttrans11 .add_sources(say) .add_destinations(dispatch)
+        
+        timertrans5 = TimerTrans(5) .set_name("timertrans5")
+        timertrans5 .add_sources(say) .add_destinations(statenode2)
+        
+        nexttrans3 = NextTrans() .set_name("nexttrans3")
+        nexttrans3 .add_sources(statenode2) .add_destinations(dispatch)
+        
+        completiontrans19 = CompletionTrans() .set_name("completiontrans19")
+        completiontrans19 .add_sources(script) .add_destinations(say2)
+        
+        cnexttrans12 = CNextTrans() .set_name("cnexttrans12")
+        cnexttrans12 .add_sources(say2) .add_destinations(dispatch)
+        
+        failuretrans8 = FailureTrans() .set_name("failuretrans8")
+        failuretrans8 .add_sources(script) .add_destinations(cmdfailed1)
+        
+        openaitrans4 = OpenAITrans() .set_name("openaitrans4")
+        openaitrans4 .add_sources(cmdfailed1) .add_destinations(check)
+        
+        timertrans6 = TimerTrans(5) .set_name("timertrans6")
+        timertrans6 .add_sources(script) .add_destinations(statenode3)
+        
+        nexttrans4 = NextTrans() .set_name("nexttrans4")
+        nexttrans4 .add_sources(statenode3) .add_destinations(dispatch)
+>>>>>>> origin/devel
         
         datatrans30 = DataTrans('retry') .set_name("datatrans30")
         datatrans30 .add_sources(find) .add_destinations(say7)
         
+<<<<<<< HEAD
         completiontrans27 = CompletionTrans() .set_name("completiontrans27")
         completiontrans27 .add_sources(say7) .add_destinations(statenode2)
         
         timertrans6 = TimerTrans(self.CmdFind.WAIT_SECS) .set_name("timertrans6")
         timertrans6 .add_sources(statenode2) .add_destinations(find)
+=======
+        failuretrans9 = FailureTrans() .set_name("failuretrans9")
+        failuretrans9 .add_sources(turntoward) .add_destinations(statenode4)
+        
+        nexttrans5 = NextTrans() .set_name("nexttrans5")
+        nexttrans5 .add_sources(statenode4) .add_destinations(dispatch)
+>>>>>>> origin/devel
         
         datatrans31 = DataTrans('reframe') .set_name("datatrans31")
         datatrans31 .add_sources(find) .add_destinations(say8)
@@ -1901,8 +2122,13 @@ class Celeste(StateMachineProgram):
         failuretrans16 = FailureTrans() .set_name("failuretrans16")
         failuretrans16 .add_sources(findbackup) .add_destinations(cmdfailed3)
         
+<<<<<<< HEAD
         openaitrans4 = OpenAITrans() .set_name("openaitrans4")
         openaitrans4 .add_sources(cmdfailed3) .add_destinations(check)
+=======
+        openaitrans5 = OpenAITrans() .set_name("openaitrans5")
+        openaitrans5 .add_sources(cmdfailed2) .add_destinations(check)
+>>>>>>> origin/devel
         
         completiontrans31 = CompletionTrans() .set_name("completiontrans31")
         completiontrans31 .add_sources(reframefind) .add_destinations(statenode4)
@@ -1913,8 +2139,13 @@ class Celeste(StateMachineProgram):
         failuretrans17 = FailureTrans() .set_name("failuretrans17")
         failuretrans17 .add_sources(reframefind) .add_destinations(cmdfailed4)
         
+<<<<<<< HEAD
         openaitrans5 = OpenAITrans() .set_name("openaitrans5")
         openaitrans5 .add_sources(cmdfailed4) .add_destinations(check)
+=======
+        openaitrans6 = OpenAITrans() .set_name("openaitrans6")
+        openaitrans6 .add_sources(cmdfailed3) .add_destinations(check)
+>>>>>>> origin/devel
         
         completiontrans32 = CompletionTrans() .set_name("completiontrans32")
         completiontrans32 .add_sources(findturn) .add_destinations(statenode5)
@@ -1925,6 +2156,7 @@ class Celeste(StateMachineProgram):
         failuretrans18 = FailureTrans() .set_name("failuretrans18")
         failuretrans18 .add_sources(findturn) .add_destinations(cmdfailed5)
         
+<<<<<<< HEAD
         openaitrans6 = OpenAITrans() .set_name("openaitrans6")
         openaitrans6 .add_sources(cmdfailed5) .add_destinations(check)
         
@@ -2167,5 +2399,27 @@ class Celeste(StateMachineProgram):
         
         openaitrans20 = OpenAITrans() .set_name("openaitrans20")
         openaitrans20 .add_sources(cmdfailed18) .add_destinations(check)
+=======
+        openaitrans7 = OpenAITrans() .set_name("openaitrans7")
+        openaitrans7 .add_sources(cmdfailed4) .add_destinations(check)
+        
+        cnexttrans16 = CNextTrans() .set_name("cnexttrans16")
+        cnexttrans16 .add_sources(pickup) .add_destinations(dispatch)
+        
+        failuretrans12 = FailureTrans() .set_name("failuretrans12")
+        failuretrans12 .add_sources(pickup) .add_destinations(statenode5)
+        
+        nexttrans6 = NextTrans() .set_name("nexttrans6")
+        nexttrans6 .add_sources(statenode5) .add_destinations(dispatch)
+        
+        cnexttrans17 = CNextTrans() .set_name("cnexttrans17")
+        cnexttrans17 .add_sources(search) .add_destinations(dispatch)
+        
+        failuretrans13 = FailureTrans() .set_name("failuretrans13")
+        failuretrans13 .add_sources(search) .add_destinations(cmdfailed5)
+        
+        openaitrans8 = OpenAITrans() .set_name("openaitrans8")
+        openaitrans8 .add_sources(cmdfailed5) .add_destinations(check)
+>>>>>>> origin/devel
         
         return self

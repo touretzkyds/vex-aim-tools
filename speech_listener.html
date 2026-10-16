@@ -80,6 +80,15 @@
           padding: 4px;
       }
 
+      /* Press-and-hold buttons: don't let a touch scroll, zoom, select the
+         label, or pop up a callout. */
+      #pttButton, #resetButton {
+          touch-action: none;
+          user-select: none;
+          -webkit-user-select: none;
+          -webkit-touch-callout: none;
+      }
+
       .live-mic-button {
           border: none;
           background-color: white;
@@ -200,6 +209,12 @@
           color: #888;
           font-style: italic;
       }
+
+      .unsupported-warning {
+          color: red;
+          font-size: x-large;
+          font-weight: bold;
+      }
     </style>
   </head>
   <body>
@@ -264,20 +279,34 @@
 
       const modeOrder = ['live', 'edit', 'ptt'];
 
+      const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognitionLang = 'en-US';
+      // Recognize speech on this computer rather than in the cloud.
+      const onDeviceOptions = { langs: [recognitionLang], processLocally: true };
+
+      // Recognition errors that restarting can't fix, with what to tell the user.
+      const fatalRecognitionErrors = {
+          'not-allowed': 'microphone access was denied',
+          'service-not-allowed': 'the browser\'s speech service is not available',
+          'audio-capture': 'no microphone was found',
+          'language-not-supported': 'US English recognition is not available on this computer',
+      };
+
       let recognition;
+      let restartDelay = 0; // ms to wait before restarting after recognition ends
       let isRecording = false;
       let isPTT = false;
       let mode = 'ptt';
 
       // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
       function getTime () {
-	  let date = new Date();
-	  return date.getTime();
+          let date = new Date();
+          return date.getTime();
       }
       const sessionID = String(1000 + Math.round(8999 * Math.random())) + String(getTime());
 
       function sendSessionID() {
-          fetch('http://127.0.0.1:51327/api/set-session-id', {
+          fetch('/api/set-session-id', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ sessionID: sessionID })
@@ -285,30 +314,30 @@
       }
 
       function checkSessionID() {
-	  // Make sure we're still the active session.  If not, close the window.
-          let response = fetch('http://127.0.0.1:51327/api/get-session-id', {
+          // Make sure we're still the active session.  If not, close the window.
+          fetch('/api/get-session-id', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' }
           }).then(response => response.json())
               .then(data => {
                   console.log('Backend response:', data);
-		  let currentID = data['sessionID'];
-		  if (sessionID != currentID) {
-		      closeSession();
-		  }
+                  let currentID = data['sessionID'];
+                  if (sessionID != currentID) {
+                      closeSession();
+                  }
               });
       }
 
       function closeSession() {
-	  try {
-	      window.close();
-	  } catch (exception) {}
-	  window.location.href = 'http://127.0.0.1:51327/listener_closed.html';
+          try {
+              window.close();
+          } catch (exception) {}
+          window.location.href = '/listener_closed.html';
       }
 
       function sendSpeechText(text) {
           console.log('Speech result:', text);
-          fetch('http://127.0.0.1:51327/api/speech-to-text', {
+          fetch('/api/speech-to-text', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ text: text })
@@ -337,7 +366,7 @@
       });
 
       function connectConsoleStream() {
-          const eventSource = new EventSource('http://127.0.0.1:51327/api/console-stream');
+          const eventSource = new EventSource('/api/console-stream');
           eventSource.onmessage = (event) => { appendConsoleMessage(event.data); };
           eventSource.onerror = (event) => { console.error('Console stream error:', event); };
       }
@@ -357,22 +386,37 @@
       }
 
       function initializeRecognition() {
-	  if (! ('webkitSpeechRecognition' in window)) {
-	      resultDiv.innerHTML = '<font size=+2 color="red"><b>Speech recognition not supported in this browser!</b></font>';
-	      return;
-	  };
+          if (!SpeechRecognitionAPI) {
+              resultDiv.innerHTML = '<div class="unsupported-warning">Speech recognition not supported in this browser!</div>';
+              return;
+          }
 
-          recognition = new webkitSpeechRecognition();
+          recognition = new SpeechRecognitionAPI();
           recognition.continuous = true; // Enable continuous recognition
           recognition.interimResults = false;
-          recognition.lang = 'en-US';
+          recognition.lang = recognitionLang;
+          recognition.processLocally = onDeviceOptions.processLocally;
 
           recognition.onstart = function () {
               console.log('Speech recognition started');
           };
 
           recognition.onresult = function (event) {
-              const speechResult = event.results[event.resultIndex][0].transcript;
+              // One event can deliver several newly finished segments (from
+              // resultIndex to the end); join them so a command split across
+              // segments arrives as one utterance.  Skip interim (non-final)
+              // results: on-device recognition sends them even though
+              // interimResults is false, and each would otherwise be sent as
+              // a separate partial utterance ("What", "What time", ...).
+              const segments = [];
+              for (let i = event.resultIndex; i < event.results.length; i++) {
+                  const result = event.results[i];
+                  if (!result.isFinal) continue;
+                  console.log('Final result:', result[0].transcript);
+                  segments.push(result[0].transcript.trim());
+              }
+              const speechResult = segments.filter(s => s).join(' ');
+              if (!speechResult) return;
               if (mode === 'edit') {
                   depositToTextInput(speechResult);
               } else {
@@ -382,16 +426,30 @@
 
           recognition.onerror = function (event) {
               console.error('Speech recognition error:', event.error);
-              if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-                  console.error('Microphone access denied');
+              if (event.error in fatalRecognitionErrors) {
+                  // Restarting would just fail again, so stop listening and tell the user.
+                  isRecording = false;
+                  isPTT = false;
+                  if (mode === 'live') setMode('ptt');
+                  updatePTTButton();
+                  showStatus(`Speech recognition stopped: ${fatalRecognitionErrors[event.error]}.`, true);
+              } else if (event.error === 'network') {
+                  restartDelay = 1000; // don't retry in a tight loop while offline
               }
           };
 
           recognition.onend = function () {
               console.log('Speech recognition ended');
               if (isRecording || isPTT) {
-                  console.log('Restarting speech recognition...');
-                  recognition.start(); // Restart recognition if still recording or PTT held
+                  const delay = restartDelay;
+                  restartDelay = 0;
+                  setTimeout(() => {
+                      // Restart recognition if still recording or PTT held
+                      if (isRecording || isPTT) {
+                          console.log('Restarting speech recognition...');
+                          try { recognition.start(); } catch (e) {} // may already be restarted by PTT
+                      }
+                  }, delay);
               }
           };
       }
@@ -417,10 +475,20 @@
           sendButton.style.display = mode === 'edit' ? '' : 'none';
       }
 
+      function requestMicrophone() {
+          // Make sure we have microphone permission.  Speech recognition opens
+          // its own audio input, so release this stream right away; otherwise
+          // the mic stays in use and each call would open another stream.
+          return navigator.mediaDevices.getUserMedia({ audio: true })
+              .then(stream => { stream.getTracks().forEach(track => track.stop()); });
+      }
+
       function startRecording() {
-          navigator.mediaDevices.getUserMedia({ audio: true })
-              .then(stream => {
+          requestMicrophone()
+              .then(() => {
                   console.log('Microphone access granted');
+                  // The user may have left Live Mic mode while we waited.
+                  if (mode !== 'live') return;
                   if (!isRecording) {
                       if (!recognition) initializeRecognition();
                       recognition.start();
@@ -489,7 +557,7 @@
 
       uploadButton.addEventListener('click', () => fileInput.click());
 
-      function showUploadStatus(message, isError = false) {
+      function showStatus(message, isError = false) {
           const line = document.createElement('p');
           line.textContent = message;
           if (isError) line.style.color = 'red';
@@ -520,9 +588,9 @@
               const detail = result.kind === 'pdf'
                   ? `${result.sourceBytes} byte PDF indexed for retrieval`
                   : `${result.textBytes} bytes`;
-              showUploadStatus(`Loaded ${result.name} (${detail})`);
+              showStatus(`Loaded ${result.name} (${detail})`);
           } catch (error) {
-              showUploadStatus(error.name === 'AbortError'
+              showStatus(error.name === 'AbortError'
                   ? 'Upload timed out. The document may be too large to index.'
                   : `Upload failed: ${error.message}`, true);
           } finally {
@@ -533,18 +601,28 @@
           }
       });
 
-      resetButton.addEventListener('mousedown', () => {
+      // The Reset and PTT buttons use pointer events so they work with a mouse,
+      // touchscreen, or pen.  Only the primary button counts (not right-click),
+      // and pointer capture delivers the release even if it happens elsewhere.
+
+      resetButton.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          resetButton.setPointerCapture(event.pointerId);
           resetButton.style.backgroundColor = '#ff4d00';
           resetButton.style.color = 'white';
-          fetch('http://127.0.0.1:51327/api/reset-fsm', { method: 'POST' });
+          fetch('/api/reset-fsm', { method: 'POST' });
       });
 
-      document.addEventListener('mouseup', () => {
+      function releaseResetButton() {
           resetButton.style.backgroundColor = 'white';
           resetButton.style.color = '#ff4d00';
-      });
+      }
+      resetButton.addEventListener('pointerup', releaseResetButton);
+      resetButton.addEventListener('pointercancel', releaseResetButton);
 
-      pttButton.addEventListener('mousedown', () => {
+      pttButton.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          pttButton.setPointerCapture(event.pointerId);
           if (mode === 'live') {
               // Switch from Live Mic mode to PTT mode immediately, then start talking.
               setMode('ptt');
@@ -552,11 +630,16 @@
           isPTT = true;
           pttButton.style.backgroundColor = 'red';
           if (!recognition) {
-              navigator.mediaDevices.getUserMedia({ audio: true })
-                  .then(stream => {
+              requestMicrophone()
+                  .then(() => {
                       console.log('Microphone access granted');
-                      initializeRecognition();
-                      recognition.start();
+                      // Another press may have created it while we waited.
+                      if (!recognition) initializeRecognition();
+                      // Only start if the button is still held; it may have been
+                      // released while the permission request was pending.
+                      if (recognition && isPTT) {
+                          try { recognition.start(); } catch (e) {}
+                      }
                   })
                   .catch(error => {
                       console.error('Microphone access denied', error);
@@ -568,26 +651,65 @@
           }
       });
 
-      document.addEventListener('mouseup', () => {
+      function releasePTT() {
           if (isPTT) {
               isPTT = false;
               updatePTTButton();
               if (recognition) recognition.stop();
           }
-      });
+      }
+      pttButton.addEventListener('pointerup', releasePTT);
+      pttButton.addEventListener('pointercancel', releasePTT);
+      // If the window loses focus mid-press (e.g. Alt-Tab), the release may
+      // never arrive, so treat it as a release rather than leaving the mic on.
+      window.addEventListener('blur', releasePTT);
+
+      // A long press on a touchscreen would otherwise open a context menu.
+      pttButton.addEventListener('contextmenu', (event) => event.preventDefault());
+      resetButton.addEventListener('contextmenu', (event) => event.preventDefault());
 
       sendButton.addEventListener('click', () => {
           sendCurrentText();
       });
 
       textInput.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter' && mode !== 'edit') {
+          // Shift+Enter adds a new line; Enter while an input method is
+          // composing text (e.g. picking a character) confirms it, not sends.
+          if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && mode !== 'edit') {
               event.preventDefault(); // don't insert a newline into the textarea
               sendCurrentText();
           }
       });
 
+      async function checkOnDeviceModel() {
+          // Make sure Chrome's on-device speech model is installed, downloading
+          // it if necessary, and tell the user if on-device recognition can't work.
+          if (!SpeechRecognitionAPI) return; // initializeRecognition() reports this
+          if (typeof SpeechRecognitionAPI.available !== 'function') {
+              showStatus('This browser can\'t do on-device speech recognition.', true);
+              return;
+          }
+          try {
+              const status = await SpeechRecognitionAPI.available(onDeviceOptions);
+              if (status === 'available') return;
+              if (status === 'unavailable') {
+                  showStatus('On-device US English speech recognition is not available on this computer.', true);
+                  return;
+              }
+              // 'downloadable' or 'downloading'
+              showStatus('Downloading the on-device speech model...');
+              if (await SpeechRecognitionAPI.install(onDeviceOptions)) {
+                  showStatus('On-device speech model installed.');
+              } else {
+                  showStatus('Could not install the on-device speech model.', true);
+              }
+          } catch (error) {
+              showStatus(`Could not check the on-device speech model: ${error.message}`, true);
+          }
+      }
+
       // Start up the speech listener service
+      checkOnDeviceModel();
       sendSessionID();
       setInterval(() => { checkSessionID(); }, 2000);
       connectConsoleStream();
