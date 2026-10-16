@@ -6,7 +6,8 @@ from aim_fsm import *
 from aim_fsm.openvocab_commands import target_commands, lookup_openvocab_target
 from aim_fsm.openvocab import DETECTION_TIMEOUT, EDGE_PX, MAX_REFRAME_DEG, view_limited_step
 
-CELESTE_VERSION = "1.5"
+CHARACTER_NAME = "Celeste"  # built on Celeste 1.5
+CHARACTER_VERSION = "1.5"
 OPENVOCAB_MODEL = 'gpt-5.6-luna'
 OPENVOCAB_3D_ENABLED = True
 OPENVOCAB_3D_MODEL = OPENVOCAB_MODEL
@@ -247,13 +248,9 @@ class Celeste(StateMachineProgram):
     SEARCH_FAIL_MSG = "I turned all the way around but could not find %s."
 
     def __init__(self):
-<<<<<<< HEAD
         self.stopped = False     # set when a failure ends the request
         self.retargeted = False  # a wrong object was already replaced in this request
-        super().__init__(character_name="Celeste",
-=======
         super().__init__(character_name=CHARACTER_NAME,
->>>>>>> origin/devel
                          launch_cam_viewer=True,
                          launch_worldmap_viewer=True,
                          launch_particle_viewer=True,
@@ -277,7 +274,6 @@ class Celeste(StateMachineProgram):
 
     def start(self):
         self.robot.openai_client.set_preamble(new_preamble)
-<<<<<<< HEAD
         from aim_fsm.openvocab_shape import ShapeGenerator
         previous = getattr(self.robot, 'openvocab_shapes', None)
         if previous:
@@ -289,12 +285,8 @@ class Celeste(StateMachineProgram):
             self.robot.openvocab_detector.verification_model = VERIFICATION_MODEL
             self.robot.openvocab_detector.batch_first_verification = OPENVOCAB_BATCH_FIRST
             self.robot.openvocab_detector.base_tolerance_480 = OPENVOCAB_BASE_TOLERANCE_PX
-        self.picked_up_handler = self.picked_up_celeste
-        self.put_down_handler = self.put_down_celeste
-=======
         self.picked_up_handler = self.picked_up_character
         self.put_down_handler = self.put_down_character
->>>>>>> origin/devel
         super().start()
 
     def stop(self):
@@ -342,15 +334,11 @@ class Celeste(StateMachineProgram):
             # raw text lines to #say commands.
             if any((line.startswith('#') for line in lines)):
                 commands = [line if line.startswith('#') else ('#say ' + line) for line in lines]
-<<<<<<< HEAD
                 if self.parent.stopped:
                     commands = [c for c in commands if c.startswith('#say ')]
                 commands = self.target_commands(commands)
-                print(commands)
-=======
                 if commands != ["#noaction"]:
                     print(commands)
->>>>>>> origin/devel
                 self.post_data(commands)
             # else response is a pure string so just speak it in one gulp
             else:
@@ -1338,13 +1326,9 @@ class Celeste(StateMachineProgram):
 
         putdown: Say(["I'm good", "Okay then", "I'm back", "Now then"]) =C=> loop
 
-<<<<<<< HEAD
-        loop: self.Idle() =Hear()=> AskGPT() =OpenAITrans()=> check
-=======
         loop: StateNode()
         loop =Hear()=> AskGPT() =OpenAITrans()=> check
         loop =T(2)=> AskGPT("#autonomous") =OpenAITrans()=> check
->>>>>>> origin/devel
 
         check: self.CheckResponse()
         check =D(list)=> dispatch
