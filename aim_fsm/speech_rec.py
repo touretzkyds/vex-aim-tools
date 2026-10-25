@@ -82,11 +82,11 @@ def serve_pointer():
     parent_dir = os.path.join(this_dir, '..', 'media' )
     return send_from_directory(parent_dir, 'ptt_pointer.png')
 
-@app.route('/settings-778_32.png')
+@app.route('/settings_button.png')
 def serve_settings_icon():
     this_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.join(this_dir, '..', 'media' )
-    return send_from_directory(parent_dir, 'settings-778_32.png')
+    return send_from_directory(parent_dir, 'settings_button.png')
 
 @app.route('/favicon.ico')
 def serve_favicon():
