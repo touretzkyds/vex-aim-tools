@@ -88,6 +88,12 @@ def serve_settings_icon():
     parent_dir = os.path.join(this_dir, '..', 'media' )
     return send_from_directory(parent_dir, 'settings-778_32.png')
 
+@app.route('/favicon.ico')
+def serve_favicon():
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.join(this_dir, '..', 'media' )
+    return send_from_directory(parent_dir, 'favicon.ico')
+
 @app.route('/listener_closed.html')
 def serve_closed():
     this_dir = os.path.dirname(os.path.abspath(__file__))
