@@ -281,7 +281,7 @@
 
       const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
       const recognitionLang = 'en-US';
-      // Recognize speech on this computer rather than in the cloud.
+      // Options for checking and installing Chrome's on-device speech model.
       const onDeviceOptions = { langs: [recognitionLang], processLocally: true };
 
       // Recognition errors that restarting can't fix, with what to tell the user.
@@ -297,6 +297,22 @@
       let isRecording = false;
       let isPTT = false;
       let mode = 'ptt';
+      let modelInstallPending = false; // on-device model awaits a user gesture to download
+      // Recognize speech on this computer rather than in the cloud.  This
+      // stays false (cloud recognition) until the on-device model is known
+      // to be installed.
+      let useOnDevice = false;
+
+      function setOnDevice(on) {
+          useOnDevice = on;
+          // Takes effect the next time recognition starts.
+          if (recognition) recognition.processLocally = on;
+      }
+
+      function fallBackToCloud(reason) {
+          setOnDevice(false);
+          showStatus(`${reason} Using cloud speech recognition instead.`);
+      }
 
       // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
       function getTime () {
@@ -395,7 +411,7 @@
           recognition.continuous = true; // Enable continuous recognition
           recognition.interimResults = false;
           recognition.lang = recognitionLang;
-          recognition.processLocally = onDeviceOptions.processLocally;
+          recognition.processLocally = useOnDevice;
 
           recognition.onstart = function () {
               console.log('Speech recognition started');
@@ -426,7 +442,11 @@
 
           recognition.onerror = function (event) {
               console.error('Speech recognition error:', event.error);
-              if (event.error in fatalRecognitionErrors) {
+              if (event.error === 'language-not-supported' && useOnDevice) {
+                  // The on-device model can't be used after all; the restart
+                  // in onend will use the cloud instead.
+                  fallBackToCloud('On-device US English recognition failed.');
+              } else if (event.error in fatalRecognitionErrors) {
                   // Restarting would just fail again, so stop listening and tell the user.
                   isRecording = false;
                   isPTT = false;
@@ -533,6 +553,7 @@
       }
 
       modeSwitch.addEventListener('click', (event) => {
+          installModelOnGesture();
           const rect = modeSwitch.getBoundingClientRect();
           const third = rect.width / 3;
           const relX = event.clientX - rect.left;
@@ -541,6 +562,7 @@
       });
 
       modeSwitch.addEventListener('keydown', (event) => {
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') installModelOnGesture();
           const idx = modeOrder.indexOf(mode);
           if (event.key === 'ArrowLeft' && idx > 0) {
               setMode(modeOrder[idx - 1]);
@@ -552,6 +574,7 @@
       });
 
       liveMicButton.addEventListener('click', () => {
+          installModelOnGesture();
           setMode('live');
       });
 
@@ -562,6 +585,7 @@
           line.textContent = message;
           if (isError) line.style.color = 'red';
           resultDiv.appendChild(line);
+          return line;
       }
 
       fileInput.addEventListener('change', async () => {
@@ -622,6 +646,9 @@
 
       pttButton.addEventListener('pointerdown', (event) => {
           if (event.button !== 0) return;
+          // A mouse press counts as a user gesture for install(), but a touch
+          // or pen press doesn't until it's released (see releasePTT).
+          if (event.pointerType === 'mouse') installModelOnGesture();
           pttButton.setPointerCapture(event.pointerId);
           if (mode === 'live') {
               // Switch from Live Mic mode to PTT mode immediately, then start talking.
@@ -658,7 +685,10 @@
               if (recognition) recognition.stop();
           }
       }
-      pttButton.addEventListener('pointerup', releasePTT);
+      pttButton.addEventListener('pointerup', () => {
+          installModelOnGesture();
+          releasePTT();
+      });
       pttButton.addEventListener('pointercancel', releasePTT);
       // If the window loses focus mid-press (e.g. Alt-Tab), the release may
       // never arrive, so treat it as a release rather than leaving the mic on.
@@ -683,29 +713,63 @@
 
       async function checkOnDeviceModel() {
           // Make sure Chrome's on-device speech model is installed, downloading
-          // it if necessary, and tell the user if on-device recognition can't work.
+          // it if necessary, and switch to on-device recognition once it is.
+          // Until then, or if it can't work, recognition uses the cloud.
           if (!SpeechRecognitionAPI) return; // initializeRecognition() reports this
           if (typeof SpeechRecognitionAPI.available !== 'function') {
-              showStatus('This browser can\'t do on-device speech recognition.', true);
+              fallBackToCloud('This browser can\'t do on-device speech recognition.');
               return;
           }
           try {
               const status = await SpeechRecognitionAPI.available(onDeviceOptions);
-              if (status === 'available') return;
-              if (status === 'unavailable') {
-                  showStatus('On-device US English speech recognition is not available on this computer.', true);
+              if (status === 'available') {
+                  setOnDevice(true);
                   return;
               }
-              // 'downloadable' or 'downloading'
-              showStatus('Downloading the on-device speech model...');
-              if (await SpeechRecognitionAPI.install(onDeviceOptions)) {
-                  showStatus('On-device speech model installed.');
-              } else {
-                  showStatus('Could not install the on-device speech model.', true);
+              if (status === 'unavailable') {
+                  fallBackToCloud('On-device US English speech recognition is not available on this computer.');
+                  return;
               }
+              if (status === 'downloading') {
+                  // A download is already under way; install() just waits for it.
+                  showStatus('Downloading the on-device speech model. Using cloud speech recognition until it finishes.');
+                  await installOnDeviceModel();
+                  return;
+              }
+              // 'downloadable': newer Chrome versions only start the download
+              // from a user gesture, so wait for the first press of Push to
+              // Talk or Live Mic, or use of the mode switch (see
+              // installModelOnGesture).
+              modelInstallPending = true;
+              showStatus('The on-device speech model will download when you first press Push to Talk or Live Mic, or use the mode switch. Until then, speech recognition uses the cloud.');
           } catch (error) {
-              showStatus(`Could not check the on-device speech model: ${error.message}`, true);
+              fallBackToCloud(`Could not check the on-device speech model: ${error.message}.`);
           }
+      }
+
+      async function installOnDeviceModel() {
+          // Returns true if the model was installed.
+          try {
+              if (await SpeechRecognitionAPI.install(onDeviceOptions)) {
+                  setOnDevice(true);
+                  showStatus('On-device speech model installed.');
+                  return true;
+              }
+              fallBackToCloud('Could not install the on-device speech model.');
+          } catch (error) {
+              fallBackToCloud(`Could not install the on-device speech model: ${error.message}.`);
+          }
+          return false;
+      }
+
+      function installModelOnGesture() {
+          // Call this synchronously from a user-gesture event handler, so
+          // Chrome lets install() start the download.  If it fails, the next
+          // gesture tries again.
+          if (!modelInstallPending) return;
+          modelInstallPending = false;
+          showStatus('Downloading the on-device speech model. Using cloud speech recognition until it finishes.');
+          installOnDeviceModel().then(ok => { if (!ok) modelInstallPending = true; });
       }
 
       // Start up the speech listener service

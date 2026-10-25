@@ -211,6 +211,8 @@ new_preamble = f"""
   decide not to say or do anything, in which case you must respond
   "#noaction" without the quotes.
 
+  When asked to shut down, respond with "#shutdown".
+
 """
 
 class Celeste(StateMachineProgram):
@@ -269,12 +271,25 @@ class Celeste(StateMachineProgram):
             # raw text lines to #say commands.
             if any((line.startswith('#') for line in lines)):
                 commands = [line if line.startswith('#') else ('#say ' + line) for line in lines]
+                non_speech_commands = [line  for line in lines if line.startswith('#')]
                 if commands != ["#noaction"]:
                     print(commands)
+                    add_to_transcript(f'Actions: {non_speech_commands}')
                 self.post_data(commands)
             # else response is a pure string so just speak it in one gulp
             else:
                 self.post_data(response_string)
+
+    class CmdShutdown(StateNode):
+        $setup{
+            Say("Goodbye") =C=> ParentCompletes()
+            }
+
+        def stop(self):
+            super().stop()
+            print('exit called')
+            import os
+            os._exit(0)
 
     class CmdHang(Say):
         def start(self,event):
@@ -647,6 +662,7 @@ class Celeste(StateMachineProgram):
 
         dispatch: Iterate()
         dispatch =D(re.compile('#noaction$'))=> StateNode() =Next=> dispatch
+        dispatch =D(re.compile('#shutdown$')) => self.CmdShutdown() =CNext=> dispatch # still need the transition so stop() will be called
         dispatch =D(re.compile('#hang$'))=> self.CmdHang()
         dispatch =D(re.compile('#script '))=> script
         dispatch =D(re.compile('#say '))=> say

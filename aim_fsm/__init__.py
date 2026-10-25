@@ -18,6 +18,7 @@ from .pickup import *
 from .pilot import *
 from .macros import *
 from .sim_robot import *
+from .speech_rec import add_to_transcript
 
 from viewer.cam_viewer import CamViewer
 from viewer.worldmap_viewer import WorldMapViewer
