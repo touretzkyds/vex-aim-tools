@@ -1,3 +1,4 @@
+import os, sys
 from pathlib import Path
 
 from aim_fsm import *
@@ -288,7 +289,16 @@ class Celeste(StateMachineProgram):
         def stop(self):
             super().stop()
             print('exit called')
-            import os
+            if sys.stdin.isatty():
+                try:
+                    import termios
+                    fd = sys.stdin.fileno()
+                    attrs = termios.tcgetattr(fd)
+                    attrs[0] |= termios.ICRNL   # iflag: Enter sends a newline
+                    attrs[1] |= termios.OPOST   # oflag: normal output processing
+                    attrs[3] |= termios.ECHO | termios.ICANON | termios.ISIG | termios.IEXTEN  # lflag
+                    termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+                except: pass
             os._exit(0)
 
     class CmdHang(Say):

@@ -215,10 +215,204 @@
           font-size: x-large;
           font-weight: bold;
       }
+
+      .title-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+      }
+
+      .settings-button {
+          border: none;
+          background: none;
+          cursor: pointer;
+          padding: 4px;
+          display: inline-flex;
+          color: #333;
+      }
+
+      .settings-button img {
+          width: 32px;
+          height: 32px;
+      }
+
+      .settings-button:hover {
+          color: #000;
+      }
+
+      .settings-dialog {
+          width: 560px;
+          max-width: calc(100vw - 32px);
+          border: 2px solid #888;
+          border-radius: 8px;
+          padding: 16px 20px;
+      }
+
+      .settings-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 12px;
+      }
+
+      .settings-header h2 {
+          margin: 0;
+      }
+
+      /* Linux and Windows style: a plain X at the top right. */
+      .settings-close {
+          border: none;
+          background: none;
+          cursor: pointer;
+          padding: 4px;
+          display: inline-flex;
+          color: #555;
+          border-radius: 4px;
+      }
+
+      .settings-close svg {
+          width: 20px;
+          height: 20px;
+      }
+
+      .settings-close:hover {
+          color: #000;
+          background-color: #e4e4e4;
+      }
+
+      /* macOS style: a red circle at the top left. */
+      .settings-dialog.mac .settings-header {
+          justify-content: flex-start;
+      }
+
+      .settings-dialog.mac .settings-close {
+          order: -1;
+          width: 14px;
+          height: 14px;
+          padding: 0;
+          border-radius: 50%;
+          background-color: #ff5f57;
+          border: 1px solid #e0443e;
+          color: transparent;
+          align-items: center;
+          justify-content: center;
+      }
+
+      .settings-dialog.mac .settings-close svg {
+          width: 8px;
+          height: 8px;
+      }
+
+      .settings-dialog.mac .settings-close:hover {
+          color: #4d0000; /* the X appears on hover, as on a Mac */
+      }
+
+      .settings-dialog fieldset {
+          border: 1px solid #ccc;
+          border-radius: 4px;
+          margin-bottom: 12px;
+      }
+
+      .settings-dialog legend {
+          font-weight: bold;
+      }
+
+      .settings-dialog label {
+          display: block;
+          margin: 4px 0;
+      }
+
+      .setting-note {
+          color: #555;
+          font-size: 13px;
+          margin: 6px 0;
+      }
+
+      .settings-dialog details {
+          margin-top: 8px;
+      }
+
+      .settings-dialog summary {
+          cursor: pointer;
+      }
+
+      #uninstallCommands {
+          font-family: monospace;
+          font-size: 13px;
+          background-color: #f7f7f7;
+          border: 1px solid #ccc;
+          border-radius: 4px;
+          padding: 6px 8px;
+          margin: 4px 0;
+          overflow-x: auto;
+      }
     </style>
   </head>
   <body>
-    <h1>Speech Listener for VEX AIM</h1>
+    <div class="title-row">
+      <h1>Speech Listener for VEX AIM</h1>
+      <button id="settingsButton" class="settings-button" title="Settings" aria-label="Settings">
+        <img src="/settings-778_32.png" alt="">
+      </button>
+    </div>
+    <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsTitle">
+      <div class="settings-header">
+        <h2 id="settingsTitle">Settings</h2>
+        <button id="settingsCloseButton" class="settings-close" title="Close" aria-label="Close settings">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <fieldset>
+        <legend>Speech recognition</legend>
+        <label><input type="radio" name="recognition" value="auto"> Automatic: on this computer when possible, otherwise in the cloud</label>
+        <label><input type="radio" name="recognition" value="local"> On-device only: never use the cloud</label>
+        <label><input type="radio" name="recognition" value="cloud"> Don't use the on-device model: never download or require it
+          (Chrome may still use a model that's already installed)</label>
+        <div id="modelStatus" class="setting-note"></div>
+        <details>
+          <summary>Remove the on-device model</summary>
+          <p class="setting-note">A web page can't remove the model itself, but you can:</p>
+          <ol class="setting-note">
+            <li>Choose <b>Don't use the on-device model</b> above, so this page won't download the model again.</li>
+            <li>Turn off Live Caption at <code>chrome://settings/accessibility</code>, since it uses the same model.</li>
+            <li>Close every <span id="uninstallBrowserName">Chrome</span> window.</li>
+            <li id="uninstallRunStep">Run these commands in <span id="uninstallShellName">a terminal</span>:
+              <div class="transcript-header">
+                <button id="copyCommandsButton" class="copy-button" title="Copy commands" aria-label="Copy commands">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+              <pre id="uninstallCommands"></pre>
+              If the browser was started with its own data folder, use the folder shown as
+              "Profile Path" at <code>chrome://version</code>, one level up, in place of the one above.
+            </li>
+            <li id="uninstallUnknownStep" hidden>Remove the model folders, <code>SODA</code> and
+              <code>SODALanguagePacks</code>, from the browser's data folder. This page doesn't know
+              where <span id="uninstallUnknownBrowser">this browser</span> keeps them.</li>
+          </ol>
+        </details>
+      </fieldset>
+      <fieldset>
+        <legend>Startup mode</legend>
+        <select id="startupModeSelect" aria-label="Startup mode">
+          <option value="live">Live Mic</option>
+          <option value="edit">Edit</option>
+          <option value="ptt">Push to Talk</option>
+        </select>
+        <div class="setting-note">Takes effect the next time the page loads.</div>
+      </fieldset>
+      <fieldset>
+        <legend>Confirmation bell</legend>
+        <label><input type="checkbox" id="confirmationBellCheckbox"> Play a sound when an utterance is heard</label>
+      </fieldset>
+    </dialog>
     <div class="controls-row">
       <button id="liveMicButton" class="live-mic-button" aria-label="Mic Active">
         <svg class="live-mic-icon" viewBox="0 0 130 128" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
@@ -276,8 +470,42 @@
       const resultDiv = document.getElementById('result');
       const uploadButton = document.getElementById('uploadButton');
       const fileInput = document.getElementById('fileInput');
+      const settingsButton = document.getElementById('settingsButton');
+      const settingsDialog = document.getElementById('settingsDialog');
+      const modelStatus = document.getElementById('modelStatus');
+      const startupModeSelect = document.getElementById('startupModeSelect');
+      const confirmationBellCheckbox = document.getElementById('confirmationBellCheckbox');
+      const copyCommandsButton = document.getElementById('copyCommandsButton');
 
       const modeOrder = ['live', 'edit', 'ptt'];
+
+      // Settings are kept in this browser's localStorage.  confirmationBell
+      // is only saved once the user changes it; until then the robot
+      // program's own choice stands.
+      const settingsKey = 'speechListenerSettings';
+      const recognitionChoices = ['auto', 'local', 'cloud'];
+
+      function loadSettings() {
+          const settings = { recognition: 'auto', startupMode: 'ptt' };
+          let saved;
+          try {
+              saved = JSON.parse(localStorage.getItem(settingsKey));
+          } catch (e) {}
+          if (saved && typeof saved === 'object') {
+              if (recognitionChoices.includes(saved.recognition)) settings.recognition = saved.recognition;
+              if (modeOrder.includes(saved.startupMode)) settings.startupMode = saved.startupMode;
+              if (typeof saved.confirmationBell === 'boolean') settings.confirmationBell = saved.confirmationBell;
+          }
+          return settings;
+      }
+
+      function saveSettings() {
+          try {
+              localStorage.setItem(settingsKey, JSON.stringify(settings));
+          } catch (e) {} // storage unavailable; the setting lasts until the page closes
+      }
+
+      const settings = loadSettings();
 
       const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
       const recognitionLang = 'en-US';
@@ -298,20 +526,35 @@
       let isPTT = false;
       let mode = 'ptt';
       let modelInstallPending = false; // on-device model awaits a user gesture to download
-      // Recognize speech on this computer rather than in the cloud.  This
-      // stays false (cloud recognition) until the on-device model is known
-      // to be installed.
-      let useOnDevice = false;
+      // Recognize speech on this computer rather than in the cloud.  In
+      // Automatic mode this stays false (cloud recognition) until the
+      // on-device model is known to be installed.
+      let useOnDevice = settings.recognition === 'local';
 
       function setOnDevice(on) {
+          // The On-device only and Don't use the on-device model settings
+          // override the request.  processLocally = false only means
+          // "on-device not required": Chrome still uses an installed model.
+          if (settings.recognition === 'local') on = true;
+          if (settings.recognition === 'cloud') on = false;
           useOnDevice = on;
           // Takes effect the next time recognition starts.
           if (recognition) recognition.processLocally = on;
       }
 
       function fallBackToCloud(reason) {
+          if (settings.recognition === 'local') {
+              showStatus(`${reason} On-device only is selected in Settings, so speech recognition won't work until the model is installed.`, true);
+              return;
+          }
           setOnDevice(false);
           showStatus(`${reason} Using cloud speech recognition instead.`);
+      }
+
+      function untilInstalledNote() {
+          return settings.recognition === 'local'
+              ? 'Until then, speech recognition won\'t work.'
+              : 'Until then, speech recognition uses the cloud.';
       }
 
       // Get the number of milliseconds elapsed since the epoch (timestamp in milliseconds)
@@ -442,7 +685,8 @@
 
           recognition.onerror = function (event) {
               console.error('Speech recognition error:', event.error);
-              if (event.error === 'language-not-supported' && useOnDevice) {
+              if (event.error === 'language-not-supported' && useOnDevice
+                  && settings.recognition === 'auto') {
                   // The on-device model can't be used after all; the restart
                   // in onend will use the cloud instead.
                   fallBackToCloud('On-device US English recognition failed.');
@@ -716,6 +960,7 @@
           // it if necessary, and switch to on-device recognition once it is.
           // Until then, or if it can't work, recognition uses the cloud.
           if (!SpeechRecognitionAPI) return; // initializeRecognition() reports this
+          if (settings.recognition === 'cloud') return;
           if (typeof SpeechRecognitionAPI.available !== 'function') {
               fallBackToCloud('This browser can\'t do on-device speech recognition.');
               return;
@@ -732,7 +977,7 @@
               }
               if (status === 'downloading') {
                   // A download is already under way; install() just waits for it.
-                  showStatus('Downloading the on-device speech model. Using cloud speech recognition until it finishes.');
+                  showStatus(`Downloading the on-device speech model. ${untilInstalledNote()}`);
                   await installOnDeviceModel();
                   return;
               }
@@ -741,7 +986,7 @@
               // Talk or Live Mic, or use of the mode switch (see
               // installModelOnGesture).
               modelInstallPending = true;
-              showStatus('The on-device speech model will download when you first press Push to Talk or Live Mic, or use the mode switch. Until then, speech recognition uses the cloud.');
+              showStatus(`The on-device speech model will download when you first press Push to Talk or Live Mic, or use the mode switch. ${untilInstalledNote()}`);
           } catch (error) {
               fallBackToCloud(`Could not check the on-device speech model: ${error.message}.`);
           }
@@ -768,20 +1013,202 @@
           // gesture tries again.
           if (!modelInstallPending) return;
           modelInstallPending = false;
-          showStatus('Downloading the on-device speech model. Using cloud speech recognition until it finishes.');
+          showStatus(`Downloading the on-device speech model. ${untilInstalledNote()}`);
           installOnDeviceModel().then(ok => { if (!ok) modelInstallPending = true; });
       }
+
+      // ---- Settings panel ----
+
+      function applyRecognitionSetting() {
+          modelInstallPending = false;
+          setOnDevice(false); // Automatic starts on the cloud until the model is confirmed
+          checkOnDeviceModel();
+          // Live Mic restarts recognition when it stops (see onend), which
+          // picks up the new setting.
+          if (recognition && isRecording) recognition.stop();
+      }
+
+      async function refreshModelStatus() {
+          if (!SpeechRecognitionAPI) {
+              modelStatus.textContent = 'This browser doesn\'t support speech recognition.';
+              return;
+          }
+          if (typeof SpeechRecognitionAPI.available !== 'function') {
+              modelStatus.textContent = 'This browser can\'t do on-device speech recognition.';
+              return;
+          }
+          const descriptions = {
+              'available': 'The on-device speech model is installed.',
+              'downloadable': 'The on-device speech model is not installed.',
+              'downloading': 'The on-device speech model is downloading.',
+              'unavailable': 'On-device US English recognition is not available on this computer.',
+          };
+          try {
+              const status = await SpeechRecognitionAPI.available(onDeviceOptions);
+              let text = descriptions[status] || `On-device model status: ${status}.`;
+              if (status === 'available' && settings.recognition === 'cloud') {
+                  // The API can't forbid on-device recognition, only require it.
+                  text += ' Chrome may still recognize speech on this computer with it.'
+                      + ' To use the cloud, remove the model (see below).';
+              }
+              modelStatus.textContent = text;
+          } catch (error) {
+              modelStatus.textContent = `Could not check the on-device speech model: ${error.message}.`;
+          }
+      }
+
+      // Default data folders, where the on-device model is kept.
+      const chromeDataDirs = {
+          linux: '~/.config/google-chrome',
+          mac: '$HOME/Library/Application Support/Google/Chrome',
+          windows: '%LOCALAPPDATA%\\Google\\Chrome\\User Data',
+      };
+      const chromiumDataDirs = {
+          linux: '~/.config/chromium',
+          mac: '$HOME/Library/Application Support/Chromium',
+          windows: '%LOCALAPPDATA%\\Chromium\\User Data',
+      };
+
+      function detectBrowser() {
+          // Returns { name, dataDirs } where dataDirs maps an OS to the
+          // browser's default data folder, or is null if unknown.
+          const brands = (navigator.userAgentData?.brands || []).map(b => b.brand);
+          if (brands.includes('Google Chrome')) return { name: 'Chrome', dataDirs: chromeDataDirs };
+          if (brands.includes('Microsoft Edge') || /Edg\//.test(navigator.userAgent)) {
+              return { name: 'Microsoft Edge', dataDirs: null };
+          }
+          if (brands.includes('Brave')) return { name: 'Brave', dataDirs: null };
+          if (brands.includes('Chromium')) return { name: 'Chromium', dataDirs: chromiumDataDirs };
+          if (brands.length === 0) return { name: 'Chrome', dataDirs: chromeDataDirs }; // no brand list: assume Chrome
+          return { name: 'this browser', dataDirs: null };
+      }
+
+      function detectOS() {
+          const platform = navigator.userAgentData?.platform || navigator.userAgent;
+          if (/Windows|Win32|Win64/i.test(platform)) return 'windows';
+          if (/mac/i.test(platform)) return 'mac';
+          if (/CrOS|Chrome OS/i.test(platform)) return 'chromeos';
+          if (/Linux|X11/i.test(platform)) return 'linux';
+          return 'unknown';
+      }
+
+      function showUninstallCommands() {
+          // Fill in the "Remove the on-device model" steps for this browser and OS.
+          const browser = detectBrowser();
+          const os = detectOS();
+          const dataDir = browser.dataDirs && browser.dataDirs[os];
+          const modelDirs = ['SODA', 'SODALanguagePacks'];
+          document.getElementById('uninstallBrowserName').textContent = browser.name;
+          document.getElementById('uninstallUnknownBrowser').textContent = browser.name;
+          document.getElementById('uninstallRunStep').hidden = !dataDir;
+          document.getElementById('uninstallUnknownStep').hidden = !!dataDir;
+          if (!dataDir) return;
+          let commands;
+          if (os === 'windows') {
+              commands = modelDirs.map(dir => `rmdir /s /q "${dataDir}\\${dir}"`).join('\n');
+              document.getElementById('uninstallShellName').textContent = 'a Command Prompt window';
+          } else {
+              // Quote paths with spaces; ~ only expands outside quotes.
+              const quote = path => path.includes(' ') ? `"${path}"` : path;
+              commands = 'rm -rf ' + modelDirs.map(dir => quote(`${dataDir}/${dir}`)).join(' ');
+              document.getElementById('uninstallShellName').textContent = 'a terminal';
+          }
+          document.getElementById('uninstallCommands').textContent = commands;
+      }
+
+      copyCommandsButton.addEventListener('click', () => {
+          const text = document.getElementById('uninstallCommands').textContent;
+          navigator.clipboard.writeText(text).catch(error => console.error('Copy failed:', error));
+      });
+
+      function sendConfirmationBell(enabled) {
+          fetch('/api/confirmation-bell', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: enabled })
+          })
+          .then(response => response.json())
+          .then(data => { console.log('Backend response:', data); })
+          .catch(error => { console.error('Error:', error); });
+      }
+
+      function loadConfirmationBell() {
+          // Send the saved choice, or else show the robot program's own setting.
+          if (typeof settings.confirmationBell === 'boolean') {
+              confirmationBellCheckbox.checked = settings.confirmationBell;
+              sendConfirmationBell(settings.confirmationBell);
+              return;
+          }
+          fetch('/api/confirmation-bell')
+              .then(response => response.json())
+              .then(data => { confirmationBellCheckbox.checked = !!data.enabled; })
+              .catch(error => { console.error('Error:', error); });
+      }
+
+      document.querySelectorAll('input[name="recognition"]').forEach(radio => {
+          radio.checked = radio.value === settings.recognition;
+          radio.addEventListener('change', () => {
+              if (!radio.checked) return;
+              settings.recognition = radio.value;
+              saveSettings();
+              applyRecognitionSetting();
+              refreshModelStatus();
+          });
+      });
+
+      startupModeSelect.value = settings.startupMode;
+      startupModeSelect.addEventListener('change', () => {
+          settings.startupMode = startupModeSelect.value;
+          saveSettings();
+      });
+
+      confirmationBellCheckbox.addEventListener('change', () => {
+          settings.confirmationBell = confirmationBellCheckbox.checked;
+          saveSettings();
+          sendConfirmationBell(settings.confirmationBell);
+      });
+
+      settingsButton.addEventListener('click', () => {
+          refreshModelStatus();
+          showUninstallCommands();
+          settingsDialog.showModal();
+      });
+
+      // Put the close button where this OS puts it: top left on a Mac,
+      // top right elsewhere.
+      settingsDialog.classList.toggle('mac', detectOS() === 'mac');
+      document.getElementById('settingsCloseButton').addEventListener('click', () => settingsDialog.close());
+
+      // A click outside the box closes it.  Clicks on the backdrop are
+      // delivered to the dialog itself, so check where the click landed.
+      // Both the press and the release must be outside, so dragging out of
+      // the box (e.g. while selecting text) doesn't close it.
+      function isOutsideDialog(event) {
+          const rect = settingsDialog.getBoundingClientRect();
+          return event.clientX < rect.left || event.clientX > rect.right
+              || event.clientY < rect.top || event.clientY > rect.bottom;
+      }
+      let pressedOutsideDialog = false;
+      settingsDialog.addEventListener('pointerdown', (event) => {
+          pressedOutsideDialog = event.target === settingsDialog && isOutsideDialog(event);
+      });
+      settingsDialog.addEventListener('click', (event) => {
+          if (pressedOutsideDialog && event.target === settingsDialog && isOutsideDialog(event)) {
+              settingsDialog.close();
+          }
+          pressedOutsideDialog = false;
+      });
 
       // Start up the speech listener service
       checkOnDeviceModel();
       sendSessionID();
       setInterval(() => { checkSessionID(); }, 2000);
       connectConsoleStream();
-      if (mode === 'live') {
-          startRecording(); // only Live Mic mode auto-starts the mic
-      } else {
-          updatePTTButton();
+      loadConfirmationBell();
+      if (settings.startupMode !== mode) {
+          setMode(settings.startupMode); // Live Mic mode starts the mic here
       }
+      updatePTTButton();
       updateLiveMicButton();
       updateTextInputPlaceholder();
       updateSendButtonVisibility();

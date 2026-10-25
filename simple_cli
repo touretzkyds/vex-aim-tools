@@ -42,8 +42,8 @@ except:
 import aim_fsm
 from aim_fsm import *
 from aim_fsm.program import runfsm as _program_runfsm
-from viewer.lifecycle import ensure_viewer as _ensure_viewer_for_target
 
+from viewer.lifecycle import ensure_viewer as _ensure_viewer_for_target
 try:
     from viewer.imshow_manager import imshow_pump
 except Exception:

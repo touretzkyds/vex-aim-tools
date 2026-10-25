@@ -82,6 +82,12 @@ def serve_pointer():
     parent_dir = os.path.join(this_dir, '..', 'media' )
     return send_from_directory(parent_dir, 'ptt_pointer.png')
 
+@app.route('/settings-778_32.png')
+def serve_settings_icon():
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.join(this_dir, '..', 'media' )
+    return send_from_directory(parent_dir, 'settings-778_32.png')
+
 @app.route('/listener_closed.html')
 def serve_closed():
     this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -124,6 +130,16 @@ def reset_fsm():
     this_dir = os.path.dirname(os.path.abspath(__file__))
     media_path = os.path.abspath(os.path.join(this_dir, '..', 'media', 'reset_fsm.mp3'))
     playsound(media_path, block=False)
+
+
+@app.route('/api/confirmation-bell', methods=['GET', 'POST'])
+def handle_confirmation_bell():
+    global speech_listener
+    if request.method == 'POST':
+        data = request.json
+        speech_listener.set_confirmation(bool(data['enabled']))
+        return jsonify({'status': 'ok'})
+    return jsonify({'enabled': speech_listener.confirmation_bell})
 
 
 DOCUMENT_MAX_BYTES = 200 * 1024 * 1024
