@@ -7,6 +7,8 @@ A simple Command Line Interface for VEX AIM.
 """
 
 ################ Imports
+import json
+import numpy as np
 
 import asyncio
 import atexit
@@ -740,6 +742,102 @@ def detect_cliff(args):
         import traceback
         traceback.print_exc()
 
+def _make_waitable_turn(done_event):
+    """Turn subclass that sets a threading.Event when the action ends."""
+    from aim_fsm.nodes import Turn
+
+    class WaitableTurn(Turn):
+        def post_completion(self, *a, **kw):
+            done_event.set()
+            return super().post_completion(*a, **kw)
+
+        def post_failure(self, *a, **kw):
+            done_event.set()
+            return super().post_failure(*a, **kw)
+
+    return WaitableTurn
+
+def _turn_and_wait(angle_deg, speed):
+    """Turn by angle_deg on the robot loop; block the CLI thread until done."""
+    done = threading.Event()
+    turn = _make_waitable_turn(done)(angle_deg, speed)
+    turn.set_parent(running_fsm)
+    robot.loop.call_soon_threadsafe(turn.start)
+
+    # Fallback timeout in case the completion hook name is wrong
+    expected = abs(angle_deg) / max(speed, 1e-6)
+    if not done.wait(timeout=expected + 3.0):
+        print(f"  (turn completion not signaled; continued after {expected + 3.0:.1f}s timeout)")
+    time.sleep(0.4)  # settle so the frame isn't motion-blurred
+
+def _get_rgb_frame(wait_new=True, timeout=2.0):
+    """Latest camera frame as HxWx3 uint8, same source UpdateOccupancyGrid uses."""
+    start_id = getattr(robot, "frame_count", None)
+    if wait_new and start_id is not None:
+        deadline = time.time() + timeout
+        # skip 2 frames so we don't grab one captured mid-rotation
+        while getattr(robot, "frame_count", start_id) < start_id + 2 and time.time() < deadline:
+            time.sleep(0.02)
+    img = getattr(robot, "camera_image", None)
+    if img is None:
+        raise RuntimeError("robot.camera_image is None (camera not streaming?)")
+    return np.array(img)[..., :3].copy()
+
+def _draw_overlay(rgb, output):
+    import cv2
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    for seg in output.segments:
+        pts = np.round(seg.polyline_px).astype(np.int32).reshape(-1, 1, 2)
+        cv2.polylines(bgr, [pts], False, (0, 0, 255), 2)
+        x, y = pts[0, 0]
+        dist = seg.distance_to_robot
+        label = f"{seg.confidence:.2f}" + (f" {dist*100:.0f}cm" if dist is not None else "")
+        cv2.putText(bgr, label, (int(x), max(12, int(y) - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(bgr, f"status={output.status}", (6, 16),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+    return bgr
+
+def _depth_vis(output):
+    import cv2
+    d = np.asarray(output.depth.depth, dtype=np.float32)
+    valid = np.isfinite(d)
+    if not valid.any():
+        return np.zeros((*d.shape, 3), np.uint8)
+    lo, hi = np.percentile(d[valid], [2, 98])
+    norm = np.clip((d - lo) / max(hi - lo, 1e-6), 0, 1)
+    return cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+
+
+def _capture_detect_save(detector, out_dir, index, heading_deg):
+    import cv2
+    rgb = _get_rgb_frame()
+    output = detector.process(rgb)
+
+    stem = f"{index:03d}_{heading_deg:+04d}deg"
+    cv2.imwrite(str(out_dir / f"{stem}_raw.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    cv2.imwrite(str(out_dir / f"{stem}_cliff.png"), _draw_overlay(rgb, output))
+    cv2.imwrite(str(out_dir / f"{stem}_depth.png"), _depth_vis(output))
+
+    meta = {
+        "heading_deg": heading_deg,
+        "pose": [float(robot.pose.x), float(robot.pose.y),
+                 float(np.degrees(robot.pose.theta))],
+        "status": output.status,
+        "segments": [
+            {
+                "confidence": float(s.confidence),
+                "length_px": float(s.length_px),
+                "distance_to_robot_m": None if s.distance_to_robot is None else float(s.distance_to_robot),
+            }
+            for s in output.segments
+        ],
+    }
+    (out_dir / f"{stem}.json").write_text(json.dumps(meta, indent=2))
+    return stem, output
+
+
+
 def scan_map(args):
     """Run 360-degree scan to build occupancy grid map.
 
@@ -827,31 +925,70 @@ def scan_map(args):
         import traceback
         traceback.print_exc()
         return
-
-    # Create behavior
-    print(f"\nPreparing occupancy grid scan ({angle}° at {speed} deg/s)...")
-    print("  Grid will be updated as robot rotates")
-    print("  Open WorldMapViewer to see the grid visualization")
-
-    behavior = ScanAndMap(angle=angle, speed=speed, detector=detector)
-
-    # Set parent to running_fsm
+    
     if running_fsm is None:
         print("Error: No running FSM found. Please start a program first.")
         return
 
-    behavior.set_parent(running_fsm)
+    # Usage: scan_map [total_angle=180] [speed=30] [step=5]
+    total_angle = angle if len(args) > 0 and args[0] else 120
+    step = int(args[2]) if len(args) > 2 and args[2] else 5
 
-    # Start the behavior
-    print("Starting scan and map...")
+    out_dir = Path("cliff_scans") / time.strftime("%Y%m%d_%H%M%S")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nCliff scan: {total_angle} deg total, {step} deg steps, saving to {out_dir.resolve()}")
+
+    results = []
+    heading = 0
+    index = 0
     try:
-        robot.loop.call_soon_threadsafe(behavior.start)
-        print(f"Scan started! Robot will rotate {angle} degrees while building map.")
-        print("Grid updates will appear in WorldMapViewer (if open).")
+        while True:
+            stem, output = _capture_detect_save(detector, out_dir, index, heading)
+            results.append((heading, output))
+            best = max((s.confidence for s in output.segments), default=0.0)
+            print(f"[{heading:4d}°] {stem}: status={output.status}, "
+                  f"segments={len(output.segments)}, best_conf={best:.2f}")
+
+            if heading >= total_angle:
+                break
+            move = min(step, total_angle - heading)
+            _turn_and_wait(move, speed)
+            heading += move
+            index += 1
+    except KeyboardInterrupt:
+        print("Scan interrupted.")
     except Exception as exc:
-        print(f"Error starting behavior: {exc}")
+        print(f"Error during scan: {exc}")
         import traceback
         traceback.print_exc()
+
+    print(f"\nDone. {index + 1} frames saved to {out_dir.resolve()}")
+    return results
+
+    # # Create behavior
+    # print(f"\nPreparing occupancy grid scan ({angle}° at {speed} deg/s)...")
+    # print("  Grid will be updated as robot rotates")
+    # print("  Open WorldMapViewer to see the grid visualization")
+
+    # behavior = ScanAndMap(angle=angle, speed=speed, detector=detector)
+
+    # # Set parent to running_fsm
+    # if running_fsm is None:
+    #     print("Error: No running FSM found. Please start a program first.")
+    #     return
+
+    # behavior.set_parent(running_fsm)
+
+    # # Start the behavior
+    # print("Starting scan and map...")
+    # try:
+    #     robot.loop.call_soon_threadsafe(behavior.start)
+    #     print(f"Scan started! Robot will rotate {angle} degrees while building map.")
+    #     print("Grid updates will appear in WorldMapViewer (if open).")
+    # except Exception as exc:
+    #     print(f"Error starting behavior: {exc}")
+    #     import traceback
+    #     traceback.print_exc()
 
 def start_mapping(args):
     """Start continuous occupancy grid mapping.

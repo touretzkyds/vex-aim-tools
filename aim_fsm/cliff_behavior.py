@@ -251,6 +251,36 @@ class DetectCliff(StateNode):
                     result = self.detector.process(frame)
                     frame_elapsed = time.time() - frame_start
 
+                    mask = result.valid_mask_edges
+                    if mask is not None:
+                        self.robot.loop.call_soon_threadsafe(
+                            setattr, self.robot, "valid_mask_edges", mask
+                        )
+                        ys = np.linspace(0, mask.shape[0] - 1, 24).astype(int)
+                        xs = np.linspace(0, mask.shape[1] - 1, 32).astype(int)
+                        grid = mask[np.ix_(ys, xs)].astype(np.uint8)
+                        self.robot.loop.call_soon_threadsafe(
+                            print,
+                            f"valid_mask frame {i + 1}: {int(mask.sum())}/{mask.size} valid\n{grid}",
+                        )
+                    
+                    import cv2
+                    output_dir = Path("depth_valid")
+                    output_dir.mkdir(exist_ok=True)
+                    annotated = np.array(frame)
+                    height, width = annotated.shape[:2]
+                    small = cv2.resize(
+                        mask.astype(np.uint8),
+                        (width, height),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                    annotated[small == 0] = (255, 40, 40)
+                    fname = output_dir / f"depth_valid_{int(time.time())}_{i}.png"
+                    cv2.imwrite(str(fname), cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
+                    self.robot.loop.call_soon_threadsafe(
+                        print, f"wrote {fname}"
+                    )
+
                     results.append(result)
                     num_segments = len(result.segments)
                     total_segments += num_segments

@@ -111,6 +111,10 @@ class OccupancyGrid:
         # Cliff mask (boolean), True means cliff
         self.cliff_mask = np.zeros((self.height, self.width), dtype=bool)
 
+        self.cliff_polylines = []
+        self._snapshot_cliff_polylines = []
+
+
         # Guard concurrent access from viewer/provider threads
         self._lock = threading.RLock()
 
@@ -227,6 +231,12 @@ class OccupancyGrid:
                         updated = True
         if updated:
             self._notify_update()
+
+    def set_latest_cliff_polylines(self, polylines):
+        """Replace the 'currently detected' cliff polylines (world frame, mm)."""
+        with self._lock:
+            self.cliff_polylines = [list(p) for p in polylines]
+        self._notify_update()
 
     def get_state(self, gx: int, gy: int) -> CellState:
         """Get the categorical state of a cell."""
@@ -763,6 +773,7 @@ class OccupancyGrid:
                 np.copyto(self._snapshot_log_odds, self.log_odds)
                 np.copyto(self._snapshot_cliff_mask, self.cliff_mask)
                 np.copyto(self._snapshot_observed, self.observed)
+                self._snapshot_cliff_polylines = [list(p) for p in self.cliff_polylines]
                 self._snapshot_version = self.version
 
         # Call callback outside locks to avoid deadlock with viewer
@@ -788,6 +799,10 @@ class OccupancyGrid:
             observed = self._snapshot_observed.copy()
             version = self._snapshot_version
         return log_odds, cliff_mask, observed, version
+    
+    def get_cliff_polylines(self):
+        with self._snapshot_lock:
+            return [list(p) for p in self._snapshot_cliff_polylines]
 
     def _world_to_grid_vec(self, x_mm: np.ndarray, y_mm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Vectorized world->grid conversion with bounds filtering."""

@@ -11,6 +11,7 @@ except:
 
 import cv2
 import numpy as _np
+import numpy as np
 
 import vex
 from . import evbase
@@ -234,8 +235,20 @@ class StateMachineProgram(StateNode):
 
     def user_image(self,image,gray): pass
 
-    def user_annotate(self,image):
-        return image
+    def user_annotate(self, image):
+        mask = getattr(self.robot, "valid_mask_edges", None)
+        if mask is None:
+            return image
+        height, width = image.shape[:2]
+        small = cv2.resize(
+            np.asarray(mask, dtype=np.uint8),
+            (width, height),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        view = np.zeros_like(image)
+        view[small > 0] = (255, 255, 255)
+        return cv2.addWeighted(image, 0.45, view, 0.55, 0)
+
 
     def _annotated_metadata(self, status: Optional[dict]) -> dict:
         meta = {
