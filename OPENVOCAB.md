@@ -13,8 +13,19 @@ platform requirements, then run from this repository:
 python -m pip install -r requirements-openvocab.txt
 ```
 
-Obtain both model assets from the Ultralytics model distribution, or copy the
-existing working assets from the development installation:
+Obtain both model assets from the Ultralytics model distribution.
+
+For yoloe026l-seg.pt (76 MB), click on the Download link on this page:
+https://docs.ultralytics.com/models/yoloe
+or use this direct link:
+https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26l-seg.pt
+
+For mobileclip2_bt.ts (242 MB), download the file from this page:
+https://github.com/ultralytics/assets/releases
+or use this direct link:
+https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts
+
+Install the model files as follows:
 
 ```text
 Celeste/
