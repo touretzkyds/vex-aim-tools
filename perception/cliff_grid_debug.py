@@ -16,15 +16,6 @@ import numpy as np
 _ROOT = None
 _PASS = 0
 
-_RUN_COLORS = (
-    (80, 180, 255),
-    (80, 255, 160),
-    (255, 180, 60),
-    (255, 80, 180),
-    (180, 120, 255),
-    (255, 255, 80),
-)
-
 
 def _root() -> Path:
     global _ROOT
@@ -49,100 +40,94 @@ class CliffGridDebug:
     def __init__(self):
         self.pass_index = _next_pass()
         self.seg_index = 0
+        self.frame_index = 0
         self.root = _root()
-        self.last_paint = {}
+        self.pending = []
 
     def __call__(self, grid, stage, payload):
         if stage == "paint":
             images = _paint_images(grid, payload, self.pass_index, self.seg_index)
-            self.last_paint = images
+            self.pending.append(images)
             tag = f"pass{self.pass_index}_seg{self.seg_index:02d}"
             _publish(self.root, tag, images)
             _append_summary(self.root, _paint_summary(grid, payload, self.pass_index, self.seg_index))
             self.seg_index += 1
             return
-        images = _extract_images(grid, payload, self.pass_index)
-        tag = f"pass{self.pass_index}_extract"
+        images = _extract_images(grid, payload, self.pass_index, self.frame_index)
+        tag = f"pass{self.pass_index}_frame{self.frame_index:02d}"
         _publish(self.root, tag, images)
-        _append_summary(self.root, _extract_summary(payload, self.pass_index))
-        sheet_images = list(self.last_paint.values()) + list(images.values())
+        _append_summary(self.root, _extract_summary(payload, self.pass_index, self.frame_index))
+        sheet_images = []
+        for painted in self.pending:
+            sheet_images.extend(painted.values())
+        sheet_images.extend(images.values())
         sheet = _sheet(sheet_images)
         if sheet is not None:
-            _save(self.root / f"pass{self.pass_index}_sheet.png", sheet)
+            _save(self.root / f"pass{self.pass_index}_frame{self.frame_index:02d}_sheet.png", sheet)
+        self.pending = []
+        self.frame_index += 1
 
 
 def _paint_images(grid, payload, pass_index, seg_index):
     safe = payload["safe"]
     drop = payload["drop"]
-    weight = float(payload["weight"])
+    weights = np.asarray(payload["weights"], dtype=np.float32)
+    rays = payload["rays"]
     robot_xy = payload["robot_xy"]
     score = np.array(grid.cliff_log_odds, copy=True)
-    mask = np.array(grid.cliff_mask, copy=True)
-    box = _crop_box(grid, (safe, drop, mask), score, robot_xy)
+    ray_cells = _ray_cells(grid, rays, safe.shape)
+    box = _crop_box(grid, (safe, drop, ray_cells, weights > 0), score, robot_xy)
     prefix = f"pass {pass_index}  seg {seg_index}"
-    both = safe & drop
-    frame = np.zeros(safe.shape, np.uint8)
-    frame[safe & ~drop] = 1
-    frame[drop] = 2
+    labels = np.zeros(safe.shape, np.uint8)
+    labels[safe & ~drop] = 1
+    labels[drop] = 2
+    ray_weights = [ray[-1] for ray in rays]
+    if ray_weights:
+        weight_note = f"{min(ray_weights):.2f}-{max(ray_weights):.2f}"
+    else:
+        weight_note = "none"
     return {
-        "01_safe": _render_mask(
-            grid, safe, box, (40, 190, 70), robot_xy,
-            f"{prefix}  safe  {int(safe.sum())} cells  vote {weight * grid.LO_FREE:+.2f}",
+        "01_rays": _render_rays(
+            grid, rays, box, robot_xy,
+            f"{prefix}  {len(rays)} rays to the edge  weight {weight_note}",
         ),
-        "02_drop": _render_mask(
-            grid, drop, box, (220, 50, 50), robot_xy,
-            f"{prefix}  drop  {int(drop.sum())} cells  vote {weight * grid.LO_OCCUPIED:+.2f}",
+        "02_ray_cells": _render_labels(
+            grid, labels, box, {1: (40, 190, 70), 2: (220, 50, 50)}, robot_xy,
+            f"{prefix}  cells along rays  safe {int((safe & ~drop).sum())}  drop {int(drop.sum())}",
         ),
-        "03_this_frame": _render_labels(
-            grid, frame, box, {1: (40, 190, 70), 2: (220, 50, 50)}, robot_xy,
-            f"{prefix}  this frame  both={int(both.sum())} take the drop vote",
+        "03_weights": _render_weights(
+            grid, weights, box, robot_xy,
+            f"{prefix}  confidence weight  conf {float(payload['weight']):.2f}  {weight_note}",
         ),
         "04_log_odds": _render_score(
             grid, score, box, robot_xy,
-            f"{prefix}  log odds  [{score.min():+.2f}, {score.max():+.2f}]  blue safe, red drop",
-        ),
-        "05_mask": _render_mask(
-            grid, mask, box, (255, 60, 60), robot_xy,
-            f"{prefix}  cliff_mask  score > {grid.LO_THRESH_OCC}",
+            f"{prefix}  log odds after vote  [{score.min():+.2f}, {score.max():+.2f}]",
         ),
     }
 
 
-def _extract_images(grid, payload, pass_index):
+def _extract_images(grid, payload, pass_index, frame_index):
     score = np.array(grid.cliff_log_odds, copy=True)
     edge = payload["edge"]
     robot_xy = None
     box = _crop_box(grid, (score < 0, score > 0, edge), score, robot_xy)
-    prefix = f"pass {pass_index} extract"
-    negative = score < 0
-    positive = score > 0
-    images = {
-        "06_score_negative": _render_mask(
-            grid, negative, box, (60, 140, 255), robot_xy,
-            f"{prefix}  score < 0  {int(negative.sum())} cells",
-        ),
-        "07_score_positive": _render_mask(
-            grid, positive, box, (230, 60, 60), robot_xy,
-            f"{prefix}  score > 0  {int(positive.sum())} cells",
-        ),
-        "08_boundary": _render_mask(
+    prefix = f"pass {pass_index}  frame {frame_index}"
+    epsilon = float(payload.get("epsilon_mm", grid.cliff_resolution))
+    simplified = payload["simplified"]
+    return {
+        "05_boundary": _render_mask(
             grid, edge, box, (255, 220, 40), robot_xy,
-            f"{prefix}  boundary  drop cell touching a safe cell  {int(edge.sum())}",
+            f"{prefix}  boundary  {int(edge.sum())} cells",
+        ),
+        "06_chain": _draw_world(
+            grid, box, score, payload["chains"], (80, 220, 255), robot_xy,
+            f"{prefix}  contour  {len(payload['chains'])} chains",
+        ),
+        "07_simplified": _draw_world(
+            grid, box, score, simplified, (255, 220, 0), robot_xy,
+            f"{prefix}  Douglas-Peucker  eps {epsilon:.0f} mm  {len(simplified)} lines",
         ),
     }
-    images["09_chain"] = _draw_world(
-        grid, box, score, payload["chains"], (80, 220, 255), robot_xy,
-        f"{prefix}  open chain  {len(payload['chains'])}",
-    )
-    images["10_runs"] = _draw_world_groups(
-        grid, box, score, payload["runs"], robot_xy,
-        f"{prefix}  straight runs  {len(payload['runs'])}  split at 35 deg",
-    )
-    images["11_polyline"] = _draw_fitted(
-        grid, box, score, payload, robot_xy,
-        f"{prefix}  fitted polyline",
-    )
-    return images
 
 
 def _crop_box(grid, masks, score, robot_xy):
@@ -161,17 +146,23 @@ def _crop_box(grid, masks, score, robot_xy):
             ys.append(yy)
             xs.append(xx)
     if robot_xy is not None:
-        gx, gy = grid.world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
+        gx, gy = grid.cliff_world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
         if gx >= 0:
             ys.append(np.array([gy], dtype=int))
             xs.append(np.array([gx], dtype=int))
+    height = grid.cliff_height
+    width = grid.cliff_width
+    for mask in masks:
+        if mask is not None and getattr(mask, "ndim", 0) == 2:
+            height, width = mask.shape
+            break
     if not ys:
-        return 0, min(grid.height, 40), 0, min(grid.width, 40)
+        return 0, min(height, 40), 0, min(width, 40)
     pad = 12
     y0 = max(int(min(v.min() for v in ys)) - pad, 0)
     x0 = max(int(min(v.min() for v in xs)) - pad, 0)
-    y1 = min(int(max(v.max() for v in ys)) + pad + 1, grid.height)
-    x1 = min(int(max(v.max() for v in xs)) + pad + 1, grid.width)
+    y1 = min(int(max(v.max() for v in ys)) + pad + 1, height)
+    x1 = min(int(max(v.max() for v in xs)) + pad + 1, width)
     return y0, y1, x0, x1
 
 
@@ -229,6 +220,47 @@ def _render_labels(grid, labels, box, colors, robot_xy, title):
     return view
 
 
+def _render_weights(grid, weights, box, robot_xy, title):
+    img = _blank(box)
+    y0, y1, x0, x1 = box
+    sub = weights[y0:y1, x0:x1]
+    peak = float(sub.max()) if sub.size else 0.0
+    scale = sub / peak if peak > 0.0 else sub
+    active = sub > 0.0
+    img[active, 0] = (40 + scale[active] * 215).astype(np.uint8)
+    img[active, 1] = (80 + scale[active] * 140).astype(np.uint8)
+    img[active, 2] = (255 - scale[active] * 180).astype(np.uint8)
+    view, geom = _finish(img, box, title)
+    _dot(view, grid, robot_xy, geom)
+    return view
+
+
+def _render_rays(grid, rays, box, robot_xy, title):
+    img = _blank(box)
+    view, geom = _finish(img, box, title)
+    for rx, ry, ex, ey, dx, dy, sample_weight in rays:
+        color = _weight_color(sample_weight)
+        _polylines(view, grid, box, [np.array([[rx, ry], [ex, ey]], dtype=float)], color, 1)
+        _polylines(view, grid, box, [np.array([[ex, ey], [dx, dy]], dtype=float)], (220, 50, 50), 1)
+    _dot(view, grid, robot_xy, geom)
+    return view
+
+
+def _weight_color(sample_weight):
+    w = float(np.clip(sample_weight, 0.0, 1.0))
+    return (int(40 + 215 * w), int(80 + 140 * w), int(255 - 180 * w))
+
+
+def _ray_cells(grid, rays, shape):
+    mask = np.zeros(shape, dtype=bool)
+    for ray in rays:
+        for x_mm, y_mm in ((ray[0], ray[1]), (ray[2], ray[3]), (ray[4], ray[5])):
+            gx, gy = grid.cliff_world_to_grid(float(x_mm), float(y_mm))
+            if gx >= 0:
+                mask[gy, gx] = True
+    return mask
+
+
 def _render_score(grid, score, box, robot_xy, title):
     img = _blank(box)
     y0, y1, x0, x1 = box
@@ -249,25 +281,6 @@ def _draw_world(grid, box, score, polylines, color, robot_xy, title):
     return base
 
 
-def _draw_world_groups(grid, box, score, groups, robot_xy, title):
-    base = _render_score(grid, score, box, robot_xy, title)
-    for i, group in enumerate(groups):
-        _polylines(base, grid, box, [group], _RUN_COLORS[i % len(_RUN_COLORS)], 2)
-    return base
-
-
-def _draw_fitted(grid, box, score, payload, robot_xy, title):
-    base = _render_score(grid, score, box, robot_xy, title)
-    for i, seg in enumerate(payload["fitted"]):
-        _polylines(base, grid, box, [np.vstack(seg)], _RUN_COLORS[i % len(_RUN_COLORS)], 1)
-    for seg in payload["bridged"]:
-        _polylines(base, grid, box, [np.vstack(seg)], (255, 255, 255), 2)
-    polyline = payload["polyline_mm"]
-    if polyline is not None and len(polyline) >= 2:
-        _polylines(base, grid, box, [polyline], (255, 220, 0), 3)
-    return base
-
-
 def _polylines(view, grid, box, polylines, color, thickness):
     y0, y1, x0, x1 = box
     out_w, out_h = _view_size(y1 - y0, x1 - x0)
@@ -278,8 +291,8 @@ def _polylines(view, grid, box, polylines, color, thickness):
             continue
         px = []
         for x_mm, y_mm in pts[:, :2]:
-            gx = (x_mm - grid.x_min) / grid.resolution - 0.5
-            gy = (y_mm - grid.y_min) / grid.resolution - 0.5
+            gx = (x_mm - grid.x_min) / grid.cliff_resolution - 0.5
+            gy = (y_mm - grid.y_min) / grid.cliff_resolution - 0.5
             col = int(round((gx - x0 + 0.5) / max(x1 - x0, 1) * out_w))
             row = int(round(out_h - (gy - y0 + 0.5) / max(y1 - y0, 1) * out_h))
             px.append((col, row + bar_h))
@@ -290,7 +303,7 @@ def _dot(view, grid, robot_xy, geom):
     if robot_xy is None:
         return
     y0, y1, x0, x1, out_w, out_h, bar_h = geom
-    gx, gy = grid.world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
+    gx, gy = grid.cliff_world_to_grid(float(robot_xy[0]), float(robot_xy[1]))
     if gx < 0:
         return
     col = int(round((gx - x0 + 0.5) / max(x1 - x0, 1) * out_w))
@@ -353,19 +366,24 @@ def _append_summary(root, text):
 
 def _paint_summary(grid, payload, pass_index, seg_index):
     score = grid.cliff_log_odds
-    weight = float(payload["weight"])
+    weights = np.asarray(payload["weights"], dtype=float)
+    used = weights[weights > 0]
+    if used.size:
+        weight_note = f"{float(used.min()):.3f} to {float(used.max()):.3f}"
+    else:
+        weight_note = "none"
     return (
         f"pass {pass_index} segment {seg_index}\n"
         f"  robot_xy_mm {payload['robot_xy']}\n"
-        f"  weight {weight:.3f}\n"
-        f"  safe cells {int(payload['safe'].sum())}  added {weight * grid.LO_FREE:+.3f}\n"
-        f"  drop cells {int(payload['drop'].sum())}  added {weight * grid.LO_OCCUPIED:+.3f}\n"
-        f"  both cells {int((payload['safe'] & payload['drop']).sum())} take the drop vote\n"
+        f"  segment confidence {float(payload['weight']):.3f}\n"
+        f"  rays {len(payload['rays'])}  cell weight {weight_note}\n"
+        f"  safe cells {int((payload['safe'] & ~payload['drop']).sum())}\n"
+        f"  drop cells {int(payload['drop'].sum())}\n"
         f"  score now [{float(score.min()):+.3f}, {float(score.max()):+.3f}]\n"
     )
 
 
-def _extract_summary(payload, pass_index):
+def _extract_summary(payload, pass_index, frame_index):
     polyline = payload["polyline_mm"]
     if polyline is None:
         length = 0.0
@@ -375,9 +393,9 @@ def _extract_summary(payload, pass_index):
         length = float(np.hypot(step[:, 0], step[:, 1]).sum()) if len(step) else 0.0
         npts = len(polyline)
     return (
-        f"pass {pass_index} extract\n"
+        f"pass {pass_index} frame {frame_index}\n"
         f"  boundary cells {int(np.asarray(payload['edge']).sum())}\n"
-        f"  chains {len(payload['chains'])}  runs {len(payload['runs'])}\n"
-        f"  fitted {len(payload['fitted'])}  bridged {len(payload['bridged'])}\n"
+        f"  chains {len(payload['chains'])}  simplified {len(payload['simplified'])}\n"
+        f"  epsilon {float(payload.get('epsilon_mm', 0.0)):.1f} mm\n"
         f"  polyline points {npts}  length {length:.1f} mm\n"
     )

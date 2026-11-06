@@ -412,6 +412,10 @@ class WorldMap():
             rotation = aboutZ(robot_pose[2])
             robot_pos = point(robot_pose[0], robot_pose[1])
 
+            camera = getattr(self.robot, "camera", None)
+            resolution = getattr(camera, "resolution", None)
+            image_width = int(resolution[0]) if resolution else None
+
             for seg in cliff_segments:
                 if seg.polyline_world is not None:
                     # Polyline in segment is in BASE frame (meters)
@@ -425,11 +429,12 @@ class WorldMap():
                         w_pt = rotation.dot(pt_vec) + robot_pos
                         world_polyline.append((float(w_pt[0,0]), float(w_pt[1,0])))
 
-                    # Mark on grid, HERE, take position & confidence
                     self.occupancy_grid.mark_cliff_polyline(
                         world_polyline,
                         (robot_pose[0], robot_pose[1]),
                         weight=float(getattr(seg, "confidence", 1.0)),
+                        pixel_xy=getattr(seg, "polyline_px", None),
+                        image_width=image_width,
                     )
             return True
         except Exception as e:

@@ -533,8 +533,10 @@ class DetectCliff(StateNode):
                 try:
                     for i, result in enumerate(raw_results):
                         world_map.mark_cliff_on_grid(result.segments, robot_pose=poses[i])
-                    if grid is not None:
-                        polyline = grid.extract_cliff_polyline_m()
+                        if grid is not None:
+                            frame_polyline = grid.extract_cliff_polyline_m()
+                            if frame_polyline is not None:
+                                polyline = frame_polyline
                     if polyline is not None:
                         world_map.add_cliff("cliff", polyline, confidence=1.0)
                 finally:

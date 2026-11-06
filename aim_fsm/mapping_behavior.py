@@ -304,6 +304,11 @@ class UpdateOccupancyGrid(StateNode):
                 seg_count = int(len(segments))
                 try:
                     world_map.mark_cliff_on_grid(segments, robot_pose=pose)
+                    grid = getattr(world_map, "occupancy_grid", None)
+                    if grid is not None:
+                        polyline = grid.extract_cliff_polyline_m()
+                        if polyline is not None:
+                            world_map.add_cliff("cliff", polyline, confidence=1.0)
                 except Exception:
                     pass
 
