@@ -152,22 +152,27 @@ class CameraImageProvider(QQuickImageProvider):
 
         status = self._resolve_status()
 
-        overlays_requested = bool(
-            (status or {}).get("aivision") or self._aruco_detector or self._user_hook
-        )
+        overlays_requested = bool((status or {}).get("aivision") or self._aruco_detector)
         if overlays_requested:
             maybe = apply_overlays(
                 annotated,
                 status,
                 int(AIVISION_RESOLUTION_SCALE) or 1,
                 self._aruco_detector,
-                self._user_hook,
             )
             if isinstance(maybe, _np.ndarray) and maybe.ndim == 3:
                 annotated = maybe.copy()
 
         if self._crosshair_enabled:
             self._apply_crosshair(annotated)
+
+        if self._user_hook is not None:
+            try:
+                maybe = self._user_hook(annotated)
+                if isinstance(maybe, _np.ndarray) and maybe.ndim == 3:
+                    annotated = maybe.copy()
+            except Exception:
+                pass
 
         return annotated
 

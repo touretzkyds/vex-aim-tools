@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - optional during standalone tools
     AIVISION_RESOLUTION_SCALE = 1.0
 
 from .help_texts import PARTICLE_HELP_TEXT
+from .lifecycle import stop_timer_if_view_hidden
 from .particle_model import LandmarkModel, ParticleLayerModel, ParticleSummary
 
 
@@ -33,7 +34,7 @@ class ParticleViewState(QObject):
         self,
         center_x: float = 0.0,
         center_y: float = 0.0,
-        zoom: float = 0.4,
+        zoom: float = 1.0,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -81,7 +82,7 @@ class ParticleViewer(QObject):
         robot: Any,
         width: int = 640,
         height: int = 640,
-        scale: float = 0.64,  # legacy compatibility (unused)
+        scale: float = 0.64,  # legacy compatibility; now used as initial zoom hint
         windowName: str = "Particle Viewer",
         bgcolor: tuple[float, float, float] | tuple[int, int, int] = (0, 0, 0),  # legacy compatibility
         update_interval_ms: int = 50,
@@ -100,8 +101,11 @@ class ParticleViewer(QObject):
         self._particle_model = ParticleLayerModel()
         self._landmark_model = LandmarkModel()
         self._summary = ParticleSummary()
-        self._view_state = ParticleViewState()
-        self._auto_center = True
+        initial_zoom = float(scale)
+        if math.isclose(initial_zoom, 0.64, rel_tol=0.0, abs_tol=1e-9):
+            initial_zoom = 1.0
+        self._view_state = ParticleViewState(zoom=initial_zoom)
+        self._auto_center = False
         self._verbose = False
         self._update_interval_ms = max(0, int(update_interval_ms))
         self._redisplay_enabled = self._update_interval_ms > 0
@@ -124,6 +128,7 @@ class ParticleViewer(QObject):
         self._view = QQuickView()
         self._view.setTitle(self._window_name)
         self._view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        self._bind_visibility_handler()
 
         self._context = self._initialise_qml_context()
         self.refresh()
@@ -138,12 +143,15 @@ class ParticleViewer(QObject):
         self._view.setHeight(self._height)
         self._view.show()
         self._focus_root()
-        print(PARTICLE_HELP_TEXT, end="")
+        #print(PARTICLE_HELP_TEXT, end="")
 
     def stop(self) -> None:
         self._timer.stop()
         self._shutdown_grid_update_worker()
         self._view.close()
+
+    def is_visible(self) -> bool:
+        return self._view.isVisible()
 
     def refresh(self) -> None:
         particle_filter = getattr(self._robot, "particle_filter", None)
@@ -254,6 +262,11 @@ class ParticleViewer(QObject):
     def turnDegrees(self, angle_deg: float) -> None:
         radians = float(angle_deg) * math.pi / 180.0
         self._drive_command("turn", radians)
+        self.refresh()
+
+    @pyqtSlot()
+    def drop(self) -> None:
+        self._drop_command()
         self.refresh()
 
     @pyqtSlot()
@@ -596,6 +609,16 @@ class ParticleViewer(QObject):
             raise RuntimeError(f"Failed to load ParticleView.qml:\n{errors}")
         return context
 
+    def _bind_visibility_handler(self) -> None:
+        signal = getattr(self._view, "visibleChanged", None)
+        if signal is None:
+            signal = getattr(self._view, "visibilityChanged", None)
+        if signal is not None:
+            signal.connect(self._handle_visibility_changed)
+
+    def _handle_visibility_changed(self, *args) -> None:
+        stop_timer_if_view_hidden(self._view, self._timer)
+
     def _focus_root(self) -> None:
         try:
             root = self._view.rootObject()
@@ -630,6 +653,27 @@ class ParticleViewer(QObject):
             fn(None, *args)
         except Exception as exc:  # pragma: no cover
             print(f"[ParticleViewer] drive.{method} failed: {exc}")
+
+    def _drop_command(self) -> None:
+        actuators = getattr(self._robot, "actuators", None)
+        kick = None
+        if isinstance(actuators, dict):
+            kick = actuators.get("kick")
+        elif actuators is not None and hasattr(actuators, "get"):
+            try:
+                kick = actuators.get("kick")
+            except Exception:  # pragma: no cover
+                kick = None
+        if kick is None:
+            kick = getattr(self._robot, "kick", None)
+        fn = getattr(kick, 'place', None) if kick is not None else None
+        if not callable(fn):
+            print(f"[ParticleViewer] kick.place unavailable")
+            return
+        try:
+            fn(None)
+        except Exception as exc:  # pragma: no cover
+            print(f"[ParticleViewer] kick.place failed: {exc}")
 
     def _print_pose(self) -> None:
         pf = self._particle_filter()

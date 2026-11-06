@@ -639,6 +639,8 @@ if __name__ == '__main__':
         sys.exit(0)
 
     infile_name = sys.argv[1]
+    if '.' not in infile_name:
+        infile_name += '.fsm'
     if len(sys.argv) == 3:
         outfile_name = sys.argv[2]
     elif infile_name == '-':

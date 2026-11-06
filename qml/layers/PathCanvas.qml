@@ -80,8 +80,8 @@ Canvas {
     function mapPoint(x, y) {
         var scale = pixelsPerMm();
         return {
-            x: (x - centerX()) * scale + width / 2,
-            y: (centerY() - y) * scale + height / 2
+            x: (centerY() - y) * scale + width / 2,
+            y: (centerX() - x) * scale + height / 2
         };
     }
 
@@ -199,7 +199,7 @@ Canvas {
         var heightPx = (item.height || 0) * scale;
         ctx.save();
         ctx.translate(center.x, center.y);
-        ctx.rotate(- (item.rotation || 0) * Math.PI / 180);
+        ctx.rotate(-((item.rotation || 0) + 90) * Math.PI / 180);
         if (item.filled) {
             ctx.fillStyle = colorString(item.color, 0.5);
             ctx.fillRect(-widthPx / 2, -heightPx / 2, widthPx, heightPx);

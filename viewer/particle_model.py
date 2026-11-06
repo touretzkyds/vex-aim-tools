@@ -52,10 +52,16 @@ def _flatten_vector(value: Any) -> Sequence[float]:
 
 def _covariance_components(matrix: Any) -> tuple[float, float, float]:
     try:
-        arr = np.asarray(matrix, dtype=float).reshape(2, 2)
-        return float(arr[0, 0]), float(arr[0, 1]), float(arr[1, 1])
+        arr = np.asarray(matrix, dtype=float)
+        if arr.ndim == 2 and arr.shape[0] >= 2 and arr.shape[1] >= 2:
+            return float(arr[0, 0]), float(arr[0, 1]), float(arr[1, 1])
+        flat = arr.reshape(-1)
+        if flat.size >= 4:
+            mat = flat[:4].reshape(2, 2)
+            return float(mat[0, 0]), float(mat[0, 1]), float(mat[1, 1])
     except Exception:
-        return 0.0, 0.0, 0.0
+        pass
+    return 0.0, 0.0, 0.0
 
 
 def _ellipse_axes(matrix: Any) -> tuple[float, float, float]:
@@ -123,7 +129,7 @@ def _label_from(name: str, world_obj: Any) -> str:
     if name.startswith("ArucoMarker-"):
         return name.split("-", 1)[-1]
     if name.startswith("Wall-"):
-        return "W" + name.split("-", 1)[-1]
+        return name
     return name
 
 
@@ -385,19 +391,41 @@ class LandmarkModel(QAbstractListModel):
         else:
             pf_landmarks = {}
 
-        world_objects = getattr(world_map, "objects", {}) if world_map is not None else {}
-
-        if hasattr(pf_landmarks, "items"):
-            iterable = pf_landmarks.items()
+        world_objects_by_string = {}
+        if world_map is not None:
+            snapshot = getattr(world_map, "snapshot_objects", None)
+            try:
+                if callable(snapshot):
+                    world_objects = snapshot() or {}
+                else:
+                    world_objects = dict(getattr(world_map, "objects", {}) or {})
+            except Exception:
+                world_objects = {}
         else:
-            iterable = pf_landmarks  # type: ignore[assignment]
+            world_objects = {}
 
-        for name, spec in iterable:
-            entry = self._build_entry(str(name), spec, world_objects.get(name), source="slam")
+        for obj in world_objects.values():
+            if isinstance(obj, ArucoMarkerObj):
+                world_objects_by_string[obj.marker_string] = obj
+            obj_name = getattr(obj, "name", None)
+            if isinstance(obj_name, str) and obj_name:
+                world_objects_by_string[obj_name] = obj
+            obj_id = getattr(obj, "id", None)
+            if isinstance(obj_id, str) and obj_id:
+                world_objects_by_string[obj_id] = obj
+                
+        if hasattr(pf_landmarks, "items"):
+            lm_iterable = pf_landmarks.items()
+        else:
+            lm_iterable = pf_landmarks  # type: ignore[assignment]
+
+        for name, spec in lm_iterable:
+            entry = self._build_entry(str(name), spec, world_objects_by_string.get(name), source="slam")
             if entry:
                 entries.append(entry)
                 seen_ids.add(entry["id"])
 
+        """
         for name, world_obj in world_objects.items():
             if name in seen_ids:
                 continue
@@ -408,6 +436,7 @@ class LandmarkModel(QAbstractListModel):
                 entries.append(entry)
 
         entries.sort(key=lambda item: item["id"])
+        """
 
         self.beginResetModel()
         self._items = entries
@@ -445,6 +474,10 @@ class LandmarkModel(QAbstractListModel):
             sigma_xx, sigma_xy, sigma_yy = _covariance_components(sigma)
         else:
             x, y, theta = _pose_components(spec)
+
+        if marker_id is None and name.startswith("ArucoMarker-"):
+            marker_token = name.split("-", 1)[-1]
+            marker_id = marker_token.split(".", 1)[0]
 
         entry: Item = {
             "id": name,

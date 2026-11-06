@@ -14,9 +14,9 @@ class CheckHolding(StateNode):
 class ClearHolding(StateNode):
     def start(self,event=None):
         super().start(event)
-        held = self.robot.holding
-        if held:
-            held.held_by = None
+        held_obj = self.robot.holding
+        if held_obj:
+            held_obj.held_by = None
             self.robot.holding = None
 
 class PickUp(ActionNode,ObjectSpecNode):
@@ -31,6 +31,7 @@ class PickUp(ActionNode,ObjectSpecNode):
             spec = self.object_spec
         self.object = self.get_object_from_spec(spec)
         super().start(event)
+        print('PickUp', self.object)
         if self.object is None:
             self.post_failure()
 
@@ -40,10 +41,10 @@ class PickUp(ActionNode,ObjectSpecNode):
             if self.robot.robot0.has_any_barrel() or self.robot.robot0.has_sports_ball():
                 self.robot.holding = self.parent.object
                 self.parent.object.held_by = self.robot
-                print('Robot now holding', self.parent.object)
+                print('Robot has picked up', self.parent.object)
                 self.post_completion()
             else:
-                print('Failed to hold', self.parent.object)
+                print('Failed to pick up', self.parent.object)
                 self.post_failure()
 
     class Pickup_PilotToObject(PilotToObject):
@@ -55,9 +56,11 @@ class PickUp(ActionNode,ObjectSpecNode):
         def start(self, event=None):
             if self.parent.object.is_visible:
                 robot_radius = self.robot.kine.body_diameter / 2
+                object_radius = getattr(self.parent.object, 'diameter', 0) / 2
                 dx = self.parent.object.pose.x - self.robot.pose.x
                 dy = self.parent.object.pose.y - self.robot.pose.y
-                self.distance_mm = sqrt(dx**2 + dy**2) - robot_radius + 10
+                print(f'{dx=:.1f} {dy=:.1f} {sqrt(dx**2 + dy**2)=:.1f}')
+                self.distance_mm = sqrt(dx**2 + dy**2) - robot_radius - object_radius + 25
                 print(f'Pickup_Forward: robot moving {self.distance_mm :0.1f} mm from {self.robot.pose} to {self.parent.object.pose}')
             else:
                 self.distance_mm = 35
@@ -86,7 +89,7 @@ class PickUp(ActionNode,ObjectSpecNode):
         plan =PILOT(GoalCollides)=> ParentPilotEvent()
 
         forward: self.Pickup_Forward()
-        forward =C=> set_hold
+        forward =C=> StateNode() =T(0.5)=> set_hold
         forward =F=> ParentFails()
 
         set_hold: self.SetHolding()

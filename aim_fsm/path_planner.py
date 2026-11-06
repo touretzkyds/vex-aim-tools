@@ -2,7 +2,7 @@
 Path planner using RRT and Wavefront algorithms.
 """
 
-from math import pi, sin, cos
+from math import pi, sin, cos, sqrt, nan, isnan
 from multiprocessing import Process
 
 #from .nodes import LaunchProcess
@@ -131,7 +131,7 @@ class PathPlanner():
                            (+30/180*pi,   50),
                            (-30/180*pi,   50),
                            (pi,           40),
-                           (pi,           80),  # if we're wedged between two cubes
+                           (pi,           80),  # if we're wedged between two objects
                            (+60/180*pi,   80),
                            (-60/180*pi,   80),
                            (+pi/2,        70),
@@ -150,15 +150,19 @@ class PathPlanner():
         if not collider:
             collider = wf.check_start_collides(start_node.x, start_node.y)
 
-        if collider:
-          if collider.obstacle_id is goal_shape.obstacle_id:  # We're already at the goal
+        distance_to_goal = sqrt((start_node.x - goal_shape.center[0,0])**2 + (start_node.y - goal_shape.center[1,0])**2)
+        distance_threshold = (rrt_instance.robot.kine.body_diameter/2) + 15 # fudge factor
+        too_close_to_goal = distance_to_goal <= distance_threshold
+        if collider or too_close_to_goal:
+          if too_close_to_goal or collider.obstacle_id is goal_shape.obstacle_id:  # We're already at the goal
+            print("path_planner: We're already at the goal.")
             step = NavStep(NavStep.DRIVE, [RRTNode(x=start_node.x, y=start_node.y)])
             navplan = NavPlan([step])
             grid_display = None if not need_grid_display else wf.grid
             result = (navplan, grid_display)
             return DataEvent(result)
           else:
-            # Find an escape move from this collision condition
+            # Find an escape move from this collider
             q = start_node.q
             for (phi, escape_distance) in escape_options:
                 if phi != pi:
@@ -191,11 +195,11 @@ class PathPlanner():
         for i in range(len(offsets)):
             offset = offsets[i]
             if i > 0:
-                wf = WaveFront(self.robot, bbox=rrt_instance.bbox)  # need a fresh grid
+                wf = WaveFront(rrt_instance.robot, bbox=rrt_instance.bbox)  # need a fresh grid
+            wf.set_goal_shape(goal_shape, offset, obstacle_inflation=0)
             # obstacles come after the goal so they can overwrite goal pixels
             for obstacle in fat_obstacles:
                 wf.add_obstacle(obstacle)
-            wf.set_goal_shape(goal_shape, offset, obstacle_inflation=0)
             wf_start = (start_node.x, start_node.y)
             goal_found = wf.propagate(*wf_start)
             if goal_found: break
@@ -243,7 +247,7 @@ class PathPlanner():
                 navplan.steps.insert(0, escape_step)
 
         # Return the navigation plan
-        #print('navplan=',navplan, '   steps=',navplan.steps)
+        print('navplan=',navplan, '   steps=',navplan.steps)
         result = (navplan, grid_display)
         return DataEvent(result)
 
@@ -279,7 +283,7 @@ class PathPlanner():
 
         # If no doorway, we're good to go.  See if we need to turn at the end.
         if door is None:
-            if len(path) > 1 and path[-1].x == path[-2].x and path[-1].y == path[-2].y:
+            if len(path) > 1 and path[-1].x == path[-2].x and path[-1].y == path[-2].y and not isnan(path[-1].q):
                 all_but_last = path[:-1]
                 drive_step = NavStep(NavStep.DRIVE, all_but_last)
                 turn_step = NavStep(NavStep.TURN_TO, path[-1].q)
@@ -289,7 +293,7 @@ class PathPlanner():
                 plan = NavPlan([drive_step])
             return plan
 
-        # Truncate the path at the doorway, and ajust to make sure
+        # Truncate the path at the doorway, and adjust to make sure
         # we're outside the approach gate.
         start_point = (pt1.x, pt1.y)
         DELTA = 15 # mm
@@ -316,6 +320,9 @@ class PathPlanner():
 
 class PathPlanToObject(StateNode):
     "goal_spec is either a WorldObject or a string (object id)"
+
+    MIN_DISTANCE_THRESHOLD = 10 # mm
+
     def __init__(self, goal_spec=None):
         super().__init__()
         self.goal_spec = goal_spec
@@ -323,7 +330,7 @@ class PathPlanToObject(StateNode):
     def start(self,event=None):
         super().start(event)
         if isinstance(event, DataEvent):
-            print('PathPlanToObject got', event)
+            print(f'PathPlanToObject got {event} with {event.data}')
             if isinstance(event.data, (WorldObject, str)):
                 self.goal_spec = event.data
             else:
@@ -336,11 +343,17 @@ class PathPlanToObject(StateNode):
             raise ValueError('No world object with this id:', self.goal_spec)
         if self.robot.particle_filter.state != ParticleFilter.LOCALIZED:
             print('PathPlanToOjectNode: Robot not localized!')
-            result = PilotEvent(NotLocalized)
+            self.post_event(PilotEvent(NotLocalized))
+            return
+        distance = sqrt((self.goal_obj.pose.x - self.robot.pose.x)**2 + (self.goal_obj.pose.y - self.robot.pose.y)**2)
+        if distance <= self.MIN_DISTANCE_THRESHOLD:
+            print(f'PathPlanToObject: distance {distance:.1f} mm already close enough')
+            self.post_completion()
+            return
         else:
-            result = self.robot.path_planner.plan_path_this_process(self.robot, self.goal_obj)
+            print(f'PathPlanToObject: {distance = :.1f} mm')
+        result = self.robot.path_planner.plan_path_this_process(self.robot, self.goal_obj)
         self.post_event(result)
-        return result
 
 #----------------------------------------------------------------
 

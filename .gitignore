@@ -3,3 +3,5 @@
 notes.txt
 snapshots
 *.py.old
+.DS_Store
+*.pth

@@ -17,11 +17,22 @@ from .program import StateMachineProgram, runfsm
 from .pickup import *
 from .pilot import *
 from .macros import *
+from .sim_robot import *
+from .speech_rec import add_to_transcript
 
 from viewer.cam_viewer import CamViewer
 from viewer.depth_viewer import DepthViewer
 from viewer.worldmap_viewer import WorldMapViewer
 from viewer.particle_viewer import ParticleViewer
 from viewer.path_viewer import PathViewer
+
+# PyQt6 imshow() API - cv2-style functions
+from viewer import (
+    namedWindow,
+    imshow,
+    destroyWindow,
+    destroyAllWindows,
+)
+
 
 del base

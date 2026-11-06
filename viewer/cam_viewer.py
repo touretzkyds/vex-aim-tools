@@ -18,6 +18,7 @@ from aim_fsm.camera import AIVISION_RESOLUTION_SCALE
 from .camera_provider import CameraImageProvider
 from .cliff_overlay import CliffOverlay, CliffOverlayConfig
 from .help_texts import CAMERA_HELP_TEXT
+from .lifecycle import stop_timer_if_view_hidden
 from .snapshot_service import SnapshotService
 
 
@@ -79,6 +80,7 @@ class CamViewer(QObject):
         self._view = QQuickView()
         self._view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
         self._view.setTitle(self._window_title)
+        self._bind_visibility_handler()
 
         self._context = self._initialise_qml_context()
         self._sync_crosshair_to_qml()
@@ -94,11 +96,18 @@ class CamViewer(QObject):
         self._view.setWidth(self._width)
         self._view.setHeight(self._height)
         self._view.show()
+        self._focus_root()
         self._sync_crosshair_to_qml()
 
     def stop(self) -> None:
         self._timer.stop()
         self._view.close()
+
+    def is_running(self) -> bool:
+        return self._timer.isActive()
+
+    def is_visible(self) -> bool:
+        return self._view.isVisible()
 
     def capture_raw(self, name: str = "robot_snap") -> Optional[str]:
         """Persist the latest raw frame using the snapshot service."""
@@ -167,6 +176,24 @@ class CamViewer(QObject):
 
         self._view.setSource(QUrl.fromLocalFile(str(qml_path)))
         return context
+
+    def _bind_visibility_handler(self) -> None:
+        signal = getattr(self._view, "visibleChanged", None)
+        if signal is None:
+            signal = getattr(self._view, "visibilityChanged", None)
+        if signal is not None:
+            signal.connect(self._handle_visibility_changed)
+
+    def _handle_visibility_changed(self, *args) -> None:
+        stop_timer_if_view_hidden(self._view, self._timer)
+
+    def _focus_root(self) -> None:
+        try:
+            root = self._view.rootObject()
+        except Exception:
+            return
+        if root is not None and hasattr(root, "forceActiveFocus"):
+            root.forceActiveFocus()
 
     def _poll_robot(self) -> None:
         image = getattr(self._robot, "camera_image", None)

@@ -69,6 +69,8 @@ class OccupancyGrid:
     SCALE_EMA_ALPHA = 0.2
     INVERT_DEPTH_ON_FAIL = True
 
+
+
     # Default sampling parameters (Method 1): fixed-budget rays with uniform
     # horizontal coverage and ground-focused vertical ROI.
     DEFAULT_SAMPLING = "bearing_bins"  # or "stride"
@@ -79,10 +81,18 @@ class OccupancyGrid:
     DEFAULT_SPLAT_RADIUS_OCC = 2
     DEFAULT_SPLAT_RADIUS_FREE = 1
 
+    # Cliff map is coarser than the obstacle map. One cell is 2.5 cm.
+    CLIFF_RESOLUTION_MM = 25.0
+    CLIFF_DROP_MM = 100.0
+    CLIFF_RANGE_D0_M = 0.5
+    CLIFF_BORDER_FRAC = 0.15
+    CLIFF_SIMPLIFY_CELLS = 1.5
+
     def __init__(self, 
                  x_range: tuple[float, float] = (-2500, 2500), 
                  y_range: tuple[float, float] = (-2500, 2500), 
-                 resolution: float = 10.0):
+                 resolution: float = 10.0,
+                 cliff_resolution: float = CLIFF_RESOLUTION_MM):
         """
         Initialize the occupancy grid.
         
@@ -99,17 +109,26 @@ class OccupancyGrid:
         
         self.width = int(np.ceil((self.x_max - self.x_min) / self.resolution))
         self.height = int(np.ceil((self.y_max - self.y_min) / self.resolution))
+        self.cliff_resolution = float(cliff_resolution)
+        self.cliff_width = int(np.ceil((self.x_max - self.x_min) / self.cliff_resolution))
+        self.cliff_height = int(np.ceil((self.y_max - self.y_min) / self.cliff_resolution))
         
         # Initialize grid with 0 (probability 0.5 = unknown)
         # Shape is (height, width) -> (y, x)
         self.log_odds = np.zeros((self.height, self.width), dtype=np.float32)
 
+        self.cliff_log_odds = np.zeros((self.cliff_height, self.cliff_width), dtype=np.float32)
+
         # Observed mask: True once a cell has been traversed/updated by a ray.
         # This distinguishes "unseen unknown" from "seen but uncertain".
         self.observed = np.zeros((self.height, self.width), dtype=bool)
         
-        # Cliff mask (boolean), True means cliff
-        self.cliff_mask = np.zeros((self.height, self.width), dtype=bool)
+        # Drop cells on the cliff map. True means the ground falls away here.
+        self.cliff_mask = np.zeros((self.cliff_height, self.cliff_width), dtype=bool)
+
+        self.cliff_polylines = []
+        self._snapshot_cliff_polylines = []
+
 
         # Guard concurrent access from viewer/provider threads
         self._lock = threading.RLock()
@@ -117,7 +136,7 @@ class OccupancyGrid:
         # Double-buffer for lock-free reads (snapshot mechanism)
         # UI thread reads from snapshots, mapping thread updates main buffers
         self._snapshot_log_odds = np.zeros((self.height, self.width), dtype=np.float32)
-        self._snapshot_cliff_mask = np.zeros((self.height, self.width), dtype=bool)
+        self._snapshot_cliff_mask = np.zeros((self.cliff_height, self.cliff_width), dtype=bool)
         self._snapshot_observed = np.zeros((self.height, self.width), dtype=bool)
         self._snapshot_version = 0
         self._snapshot_lock = threading.Lock()  # Fast lock for snapshot swap only
@@ -125,10 +144,12 @@ class OccupancyGrid:
         # Change notification for viewers
         self.version = 0
         self.on_update = None
+        self.on_cliff_debug = None
         self._depth_scale_ema = 1.0
 
         print(f"Occupancy Grid Initialized: {self.width}x{self.height} cells, "
               f"Resolution: {self.resolution}mm, "
+              f"Cliff: {self.cliff_width}x{self.cliff_height} at {self.cliff_resolution}mm, "
               f"Range: X[{self.x_min}, {self.x_max}], Y[{self.y_min}, {self.y_max}]")
 
     def world_to_grid(self, x_mm: float, y_mm: float) -> tuple[int, int]:
@@ -157,8 +178,27 @@ class OccupancyGrid:
         y_mm = self.y_min + (gy + 0.5) * self.resolution
         return x_mm, y_mm
 
+    def cliff_world_to_grid(self, x_mm: float, y_mm: float) -> tuple[int, int]:
+        """World millimeters to a cliff-map cell. Returns (-1, -1) outside the map."""
+        if not (self.x_min <= x_mm < self.x_max and self.y_min <= y_mm < self.y_max):
+            return -1, -1
+        gx = int((x_mm - self.x_min) / self.cliff_resolution)
+        gy = int((y_mm - self.y_min) / self.cliff_resolution)
+        gx = min(max(gx, 0), self.cliff_width - 1)
+        gy = min(max(gy, 0), self.cliff_height - 1)
+        return gx, gy
+
+    def cliff_grid_to_world(self, gx: int, gy: int) -> tuple[float, float]:
+        """Cliff-map cell to the world coordinates of its center."""
+        x_mm = self.x_min + (gx + 0.5) * self.cliff_resolution
+        y_mm = self.y_min + (gy + 0.5) * self.cliff_resolution
+        return x_mm, y_mm
+
     def is_in_bounds(self, gx: int, gy: int) -> bool:
         return 0 <= gx < self.width and 0 <= gy < self.height
+
+    def _cliff_in_bounds(self, gx: int, gy: int) -> bool:
+        return 0 <= gx < self.cliff_width and 0 <= gy < self.cliff_height
 
     def update_cell(self, gx: int, gy: int, state: CellState):
         """
@@ -181,59 +221,199 @@ class OccupancyGrid:
         self._notify_update()
 
     def mark_cliff(self, gx: int, gy: int, is_cliff: bool = True):
-        """Mark a cell as cliff (dangerous)."""
+        """Mark one cliff-map cell as drop."""
         updated = False
         with self._lock:
-            if not self.is_in_bounds(gx, gy):
+            if not self._cliff_in_bounds(gx, gy):
                 return
             self.cliff_mask[gy, gx] = is_cliff
             updated = True
         if updated:
             self._notify_update()
 
-    def mark_cliff_polyline(self, polyline_world: list[tuple[float, float]], is_cliff: bool = True):
-        """
-        Rasterize a world-space polyline onto the cliff mask.
-        Args:
-            polyline_world: List of (x, y) points in mm.
-            is_cliff: True to mark as cliff, False to clear.
-        """
-        updated = False
-        with self._lock:
-            if len(polyline_world) < 2:
-                return
+    def _align_edge_pixels(self, pixel_xy, count):
+        """Pair image columns with edge points. Resample when the lengths differ."""
+        if pixel_xy is None or count <= 0:
+            return None
+        pixels = np.asarray(pixel_xy, dtype=float)
+        if pixels.size == 0:
+            return None
+        if pixels.ndim == 1:
+            pixels = pixels.reshape(-1, 1)
+        if len(pixels) == count:
+            return pixels
+        index = np.linspace(0, len(pixels) - 1, count).astype(int)
+        return pixels[index]
 
-            for i in range(len(polyline_world) - 1):
-                p1 = polyline_world[i]
-                p2 = polyline_world[i+1]
-                
-                x1, y1 = p1
-                x2, y2 = p2
-                
-                dist = math.hypot(x2 - x1, y2 - y1)
-                if dist < 1e-3:
-                    continue
-                    
-                # Interpolate points every 0.5 * resolution to ensure no gaps
-                steps = int(np.ceil(dist / (self.resolution * 0.5)))
-                
-                xs = np.linspace(x1, x2, steps)
-                ys = np.linspace(y1, y2, steps)
-                
-                for x, y in zip(xs, ys):
-                    gx, gy = self.world_to_grid(x, y)
-                    if gx != -1:
-                        self.cliff_mask[gy, gx] = is_cliff
-                        updated = True
-        if updated:
-            self._notify_update()
+    def _cliff_ray_weight(self, confidence, u, image_width, range_mm):
+        """Scale one ray by detector confidence, image border, and range squared."""
+        confidence = float(np.clip(confidence, 0.0, 1.0))
+        border = 1.0
+        if u is not None and image_width is not None and float(image_width) > 1.0:
+            nearest = min(float(u), float(image_width) - 1.0 - float(u))
+            frac = nearest / float(image_width)
+            margin = float(self.CLIFF_BORDER_FRAC)
+            border = 1.0 if frac >= margin else max(frac, 0.0) / margin
+        range_m = max(float(range_mm), 0.0) / 1000.0
+        distance = 1.0 / (1.0 + (range_m / float(self.CLIFF_RANGE_D0_M)) ** 2)
+        return confidence * border * distance
+
+    def _paint_cliff_ray(self, store, x0, y0, x1, y1, sample_weight):
+        """Write the strongest weight into each cliff cell along a segment."""
+        dist = math.hypot(x1 - x0, y1 - y0)
+        intervals = max(int(np.ceil(dist / self.cliff_resolution)), 1)
+        for x, y in zip(np.linspace(x0, x1, intervals + 1), np.linspace(y0, y1, intervals + 1)):
+            gx, gy = self.cliff_world_to_grid(float(x), float(y))
+            if gx >= 0:
+                store[gy, gx] = max(store[gy, gx], sample_weight)
+
+    def mark_cliff_polyline(self, polyline_world, robot_xy, weight=1.0,
+                            pixel_xy=None, image_width=None):
+        """Vote safe ground up to a detected edge and drop just beyond it.
+
+        ``weight`` is the segment confidence. Each ray is scaled again by how
+        close its pixel is to the image border and by ``1 / (1 + (range/d0)^2)``.
+        """
+        weight = float(weight)
+        pts = np.asarray(polyline_world, dtype=float)
+        rx, ry = float(robot_xy[0]), float(robot_xy[1])
+        if weight <= 0.0 or pts.ndim != 2 or pts.shape[0] < 2 or pts.shape[1] < 2:
+            return
+        if self.cliff_world_to_grid(rx, ry)[0] < 0:
+            return
+        pts = pts[:, :2]
+        pixels = self._align_edge_pixels(pixel_xy, len(pts))
+
+        keep = [0]
+        traveled = 0.0
+        for index in range(1, len(pts)):
+            traveled += math.hypot(pts[index, 0] - pts[index - 1, 0], pts[index, 1] - pts[index - 1, 1])
+            if traveled >= self.cliff_resolution or index == len(pts) - 1:
+                keep.append(index)
+                traveled = 0.0
+
+        safe_w = np.zeros((self.cliff_height, self.cliff_width), dtype=np.float32)
+        drop_w = np.zeros_like(safe_w)
+        rays = []
+        for index in keep:
+            x, y = float(pts[index, 0]), float(pts[index, 1])
+            dx, dy = x - rx, y - ry
+            dist = math.hypot(dx, dy)
+            if dist < self.cliff_resolution:
+                continue
+            u = None if pixels is None else float(pixels[index, 0])
+            sample_weight = self._cliff_ray_weight(weight, u, image_width, dist)
+            if sample_weight <= 0.0:
+                continue
+            ux, uy = dx / dist, dy / dist
+            drop_x = x + ux * self.CLIFF_DROP_MM
+            drop_y = y + uy * self.CLIFF_DROP_MM
+            self._paint_cliff_ray(safe_w, rx, ry, x, y, sample_weight)
+            self._paint_cliff_ray(drop_w, x, y, drop_x, drop_y, sample_weight)
+            rays.append((rx, ry, x, y, drop_x, drop_y, sample_weight))
+
+        safe = safe_w > 0.0
+        drop = drop_w > 0.0
+        with self._lock:
+            only_safe = safe & ~drop
+            self.cliff_log_odds[only_safe] += safe_w[only_safe] * self.LO_FREE
+            self.cliff_log_odds[drop] += drop_w[drop] * self.LO_OCCUPIED
+            np.clip(self.cliff_log_odds, self.LO_MIN, self.LO_MAX, out=self.cliff_log_odds)
+            self.cliff_mask[:] = self.cliff_log_odds > self.LO_THRESH_OCC
+        self._emit_cliff_debug(
+            "paint",
+            safe=safe,
+            drop=drop,
+            weights=np.maximum(safe_w, drop_w),
+            rays=rays,
+            weight=weight,
+            robot_xy=(rx, ry),
+        )
+
+    def extract_cliff_polyline_m(self):
+        """Trace the safe/drop boundary and simplify it with Douglas-Peucker."""
+        import cv2
+        with self._lock:
+            score = self.cliff_log_odds.copy()
+            self.cliff_mask[:] = score > self.LO_THRESH_OCC
+        negative = score < 0
+        touch = np.zeros_like(negative)
+        touch[1:, :] |= negative[:-1, :]
+        touch[:-1, :] |= negative[1:, :]
+        touch[:, 1:] |= negative[:, :-1]
+        touch[:, :-1] |= negative[:, 1:]
+        edge = (score > 0) & touch
+
+        def to_mm(index_pts):
+            return np.array([self.cliff_grid_to_world(int(gx), int(gy)) for gx, gy in index_pts])
+
+        def open_chain(cnt):
+            """One trip along a contour. The walk comes back on the other side."""
+            pts = cnt[:, 0, :]
+            if len(pts) < 2:
+                return None
+            j = int(np.argmax(np.sum((pts - pts[0]) ** 2, axis=1)))
+            i = int(np.argmax(np.sum((pts - pts[j]) ** 2, axis=1)))
+            if i > j:
+                i, j = j, i
+            forward = pts[i:j + 1]
+            backward = np.vstack((pts[j:], pts[:i + 1]))
+            chain = forward if len(forward) <= len(backward) else backward
+            return to_mm(chain)
+
+        def path_len(poly):
+            step = np.diff(poly, axis=0)
+            return float(np.hypot(step[:, 0], step[:, 1]).sum())
+
+        chains = []
+        simplified = []
+        epsilon = float(self.cliff_resolution) * float(self.CLIFF_SIMPLIFY_CELLS)
+        cnts, _ = cv2.findContours(edge.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        for cnt in cnts:
+            chain = open_chain(cnt)
+            if chain is None or len(chain) < 2:
+                continue
+            chains.append(chain)
+            approx = cv2.approxPolyDP(chain.astype(np.float32).reshape(-1, 1, 2), epsilon, False)
+            simple = np.asarray(approx[:, 0, :], dtype=float)
+            if len(simple) >= 2:
+                simplified.append(simple)
+        polyline = max(simplified, key=path_len) if simplified else None
+        self._emit_cliff_debug(
+            "extract",
+            edge=edge,
+            chains=chains,
+            simplified=simplified,
+            polyline_mm=polyline,
+            epsilon_mm=epsilon,
+        )
+        if polyline is None or len(polyline) < 2:
+            return None
+        return polyline / 1000.0
+
+    def _emit_cliff_debug(self, stage, **payload):
+        callback = self.on_cliff_debug
+        if callback is None:
+            return
+        try:
+            callback(self, stage, payload)
+        except Exception:
+            _LOGGER.exception("cliff debug image failed")
+
+    def set_latest_cliff_polylines(self, polylines):
+        """Replace the 'currently detected' cliff polylines (world frame, mm)."""
+        with self._lock:
+            self.cliff_polylines = [list(p) for p in polylines]
+        self._notify_update()
 
     def get_state(self, gx: int, gy: int) -> CellState:
         """Get the categorical state of a cell."""
         if not self.is_in_bounds(gx, gy):
             return CellState.UNKNOWN
             
-        if self.cliff_mask[gy, gx]:
+        x_mm, y_mm = self.grid_to_world(gx, gy)
+        cgx, cgy = self.cliff_world_to_grid(x_mm, y_mm)
+        if cgx >= 0 and self.cliff_mask[cgy, cgx]:
             return CellState.CLIFF
             
         val = self.log_odds[gy, gx]
@@ -277,28 +457,33 @@ class OccupancyGrid:
         if x0 >= x1 or y0 >= y1:
             return False
             
-        # 2. Extract subgrid
+        # 2. Occupancy circle, then the coarser cliff map
         sub_log_odds = self.log_odds[y0:y1, x0:x1]
-        sub_cliff = self.cliff_mask[y0:y1, x0:x1]
-        
-        # 3. Check simply if any cell in box is occupied (Fast rejection)
-        # If bounding box is clear, circle is definitely clear
-        box_collision = np.any(sub_log_odds > self.LO_THRESH_OCC) or np.any(sub_cliff)
-        if not box_collision:
-            return False
-            
-        # 4. Detailed circle check
-        # Generate coordinate grid relative to center
-        # Use indices relative to (gx, gy)
-        y_idx, x_idx = np.ogrid[y0:y1, x0:x1]
-        dist_sq = (x_idx - gx)**2 + (y_idx - gy)**2
-        mask = dist_sq <= r_cells**2
-        
-        # Check collision within mask
-        if np.any((sub_log_odds[mask] > self.LO_THRESH_OCC) | sub_cliff[mask]):
+        if np.any(sub_log_odds > self.LO_THRESH_OCC):
+            y_idx, x_idx = np.ogrid[y0:y1, x0:x1]
+            dist_sq = (x_idx - gx)**2 + (y_idx - gy)**2
+            mask = dist_sq <= r_cells**2
+            if np.any(sub_log_odds[mask] > self.LO_THRESH_OCC):
+                return True
+        return self._circle_hits_cliff(x_mm, y_mm, radius_mm)
+
+    def _circle_hits_cliff(self, x_mm: float, y_mm: float, radius_mm: float) -> bool:
+        gx, gy = self.cliff_world_to_grid(x_mm, y_mm)
+        if gx < 0:
             return True
-            
-        return False
+        r_cells = int(np.ceil(radius_mm / self.cliff_resolution))
+        x0 = max(0, gx - r_cells)
+        x1 = min(self.cliff_width, gx + r_cells + 1)
+        y0 = max(0, gy - r_cells)
+        y1 = min(self.cliff_height, gy + r_cells + 1)
+        if x0 >= x1 or y0 >= y1:
+            return False
+        sub = self.cliff_mask[y0:y1, x0:x1]
+        if not np.any(sub):
+            return False
+        y_idx, x_idx = np.ogrid[y0:y1, x0:x1]
+        inside = (x_idx - gx) ** 2 + (y_idx - gy) ** 2 <= r_cells ** 2
+        return bool(np.any(sub[inside]))
 
     def is_area_free(self, x_mm: float, y_mm: float, radius_mm: float, ratio: float = 0.7) -> bool:
         """
@@ -339,6 +524,7 @@ class OccupancyGrid:
             self.log_odds.fill(0)
             self.observed.fill(False)
             self.cliff_mask.fill(False)
+            self.cliff_log_odds.fill(0)
         self._notify_update()
 
     def update_from_depth(self, 
@@ -763,6 +949,7 @@ class OccupancyGrid:
                 np.copyto(self._snapshot_log_odds, self.log_odds)
                 np.copyto(self._snapshot_cliff_mask, self.cliff_mask)
                 np.copyto(self._snapshot_observed, self.observed)
+                self._snapshot_cliff_polylines = [list(p) for p in self.cliff_polylines]
                 self._snapshot_version = self.version
 
         # Call callback outside locks to avoid deadlock with viewer
@@ -788,6 +975,10 @@ class OccupancyGrid:
             observed = self._snapshot_observed.copy()
             version = self._snapshot_version
         return log_odds, cliff_mask, observed, version
+    
+    def get_cliff_polylines(self):
+        with self._snapshot_lock:
+            return [list(p) for p in self._snapshot_cliff_polylines]
 
     def _world_to_grid_vec(self, x_mm: np.ndarray, y_mm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Vectorized world->grid conversion with bounds filtering."""

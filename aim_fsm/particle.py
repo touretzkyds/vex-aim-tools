@@ -11,9 +11,9 @@ import numpy as np
 from math import pi, sqrt, sin, cos, atan2, exp
 from .geometry import wrap_angle, wrap_selected_angles
 from .aruco import ArucoMarker
-from .worldmap import WorldObject, ArucoMarkerObj, WallObj
-
-wall_marker_dict = dict()
+from .worldmap import WorldObject, ArucoMarkerObj, WallObj, AprilTagObj
+from .aim_kin import AIMKinematics
+from .camera import AIVISION_RESOLUTION_SCALE
 
 class Particle():
     def __init__(self, index=-1):
@@ -30,12 +30,11 @@ class Particle():
     
 #================ Particle Initializers ================
 
-#to create a particle filter initialisation
 class ParticleInitializer():
     def __init__(self):
         self.pf = None   # must be filled in after creation
 
-#random initialisation of particles within a certain radius
+# Random initialization of particles within a certain radius
 class RandomWithinRadius(ParticleInitializer):
     """ Normally distribute particles within a radius, with random heading. """
     def __init__(self,radius=200):
@@ -174,9 +173,10 @@ class ArucoDistanceSensorModel(SensorModel):
         seen_marker_objects = self.robot.aruco_detector.seen_marker_objects
         # Process each seen marker:
         for (id, marker) in seen_marker_objects.items():
-            if marker.id_string in self.landmarks:
+            marker_string = f'ArucoMarker-{id}'
+            if marker_string in self.landmarks:
                 sensor_dist = marker.camera_distance
-                landmark_spec = self.landmarks[marker.id_string]
+                landmark_spec = self.landmarks[marker_string]
                 lm_x = landmark_spec.x
                 lm_y = landmark_spec.y
                 for p in particles:
@@ -208,11 +208,12 @@ class ArucoBearingSensorModel(SensorModel):
         seen_marker_objects = self.robot.aruco_detector.seen_marker_objects
         # Process each seen marker:
         for (id, marker) in seen_marker_objects.items():
-            if marker.id_string in self.landmarks:
-                camera_offset = np.array([0, 0, aim_kin.camera_from_origin])
+            marker_string = f'ArucoMarker-{id}'
+            if marker_string in self.landmarks:
+                camera_offset = np.array([0, 0, AIMKinematics.camera_from_origin])
                 sensor_coords = marker.camera_coords + camera_offset
                 sensor_bearing = atan2(sensor_coords[0], sensor_coords[2])
-                landmark_spec = self.landmarks[marker.id_string] 
+                landmark_spec = self.landmarks[marker_string] 
                 lm_x = landmark_spec.x
                 lm_y = landmark_spec.y
                 for p in particles:
@@ -248,12 +249,13 @@ class ArucoCombinedSensorModel(SensorModel):
         seen_marker_objects = self.robot.aruco_detector.seen_marker_objects
         # Process each seen marker:
         for (id, marker) in seen_marker_objects.items():
-            if marker.id_string in self.landmarks:
+            marker_string = f'ArucoMarker-{id}'
+            if marker_string in self.landmarks:
                 sensor_dist = marker.camera_distance
-                camera_offset = np.array([0, 0, aim_kin.camera_from_origin])
+                camera_offset = np.array([0, 0, AIMKinematics.camera_from_origin])
                 sensor_coords = marker.camera_coords + camera_offset
                 sensor_bearing = atan2(sensor_coords[0], sensor_coords[2])
-                landmark_spec = self.landmarks[marker.id_string]
+                landmark_spec = self.landmarks[marker_string]
                 lm_x = landmark_spec.x
                 lm_y = landmark_spec.y
                 for p in particles:
@@ -267,6 +269,62 @@ class ArucoCombinedSensorModel(SensorModel):
                     p.log_weight -= error_sq / self.distance_variance
         return True
     
+
+class AprilTagSensorModel(SensorModel):
+    """Sensor model for AprilTags using combined distance and bearing information."""
+    def __init__(self, robot, landmarks=None, distance_variance=200):
+        if landmarks is None:
+            landmarks = dict()
+        super().__init__(robot,landmarks)
+        self.distance_variance = distance_variance
+
+    def evaluate(self, particles, force=False):
+        print('***', self, 'evaluate()')
+        # Returns true if particles were evaluated.
+        # Called with force=True from particle_viewer to force evaluation.
+
+        # Don't evaluate if robot is still moving; ArUco info will be bad.
+        # if self.robot.is_moving:
+        #     return False
+
+        # Only evaluate if the robot moved enough for evaluation to be worthwhile.
+        (distance, turn_angle) = self.motion_since_last_evaluate()
+        if not force and distance < 5 and abs(turn_angle) < math.radians(5):
+            return False
+        self.last_evaluate_pose = self.robot.pose
+
+        # Cache apriltags because vision is in another thread.
+        seen_apriltags = [spec for spec in self.robot.robot0.status['aivision']['objects']['items'] if spec['type_str'] == 'tag']
+
+        for spec in seen_apriltags:
+            tag_name = spec['name']
+            if tag_name not in self.landmarks:
+                continue
+            height = spec['height']
+            width = spec['width']
+            cx = (spec['originx'] + width/2) * AIVISION_RESOLUTION_SCALE
+            corr_height = min(height, width)
+            cy = (spec['originy'] + corr_height) * AIVISION_RESOLUTION_SCALE
+            TAG_TO_GROUND_CORRECTION = 1.25 # should be 2.0 but empirically 1.25 works better
+            cy += corr_height * TAG_TO_GROUND_CORRECTION * AIVISION_RESOLUTION_SCALE
+            hit = self.robot.kine.project_to_ground(cx, cy)
+            sensor_dist = sqrt(hit[0,0]**2 + hit[1,0]**2)
+            sensor_bearing = atan2(hit[1,0], hit[0,0])
+            landmark_spec = self.landmarks[tag_name]
+            lm_x = landmark_spec.x
+            lm_y = landmark_spec.y
+            for p in particles:
+                # Use sensed bearing and distance to get particle's
+                # estimate of landmark position on the world map.
+                predicted_pos_x = p.x + sensor_dist * cos(p.theta + sensor_bearing)
+                predicted_pos_y = p.y + sensor_dist * sin(p.theta + sensor_bearing)
+                dx = lm_x - predicted_pos_x
+                dy = lm_y - predicted_pos_y
+                error_sq = dx*dx + dy*dy
+                p.log_weight -= error_sq / self.distance_variance
+        return True
+
+
 
 #================ Particle Filter ================
 
@@ -323,8 +381,8 @@ class ParticleFilter():
         self.new_x = [0.0] * num_particles # lists are faster than arrays here
         self.new_y = [0.0] * num_particles # lists are faster than arrays here`
         self.new_theta = [0.0] * num_particles # lists are faster than arrays here
-        self.dist_jitter = 20 # mm was 50
-        self.angle_jitter = 10 / 180 * pi # was 20 deg
+        self.dist_jitter = 50 # mm was 50
+        self.angle_jitter = 5 / 180 * pi # was 20 deg
         self.state = self.LOST
         self.update_pose_variance()
 
@@ -422,7 +480,6 @@ class ParticleFilter():
 
     def resample(self):
         # Compute and normalize the cdf; make local pointers for faster access.
-        #print('resampling...')
         exp_weights = self.exp_weights
         cdf = self.cdf
         cumsum = 0
@@ -513,7 +570,7 @@ class ParticleFilter():
                 sigma_y = sqrt(value[2][1,1])
                 sigma_theta = sqrt(value[2][2,2])*180/pi
             if key.startswith('ArucoMarker-'):
-                print('  Aruco marker %s' % key[12:], end='')
+                print(f'  {key}', end='')
             else:
                 print('  %r' % key, end='')
             print(' at (%6.1f, %6.1f) @ %4.1f deg    +/- (%4.1f,%4.1f)  +/- %3.1f deg' %
@@ -561,11 +618,16 @@ class SLAMParticle(Particle):
         return '<SLAMParticle %d: (%.2f, %.2f) %.1f deg. log_wt=%f, %d-lm>' % \
                (self.index, self.x, self.y, self.theta*180/pi, self.log_weight, len(self.landmarks))
 
-    sigma_r = 50
-    sigma_alpha = 15 * (pi/180)
-    sigma_phi = 15 * (pi/180)
-    sigma_theta =  15 * (pi/180)
-    sigma_z = 50
+    sigma_r = 5
+    sigma_alpha = 5 * (pi/180)
+    sigma_phi = 5 * (pi/180)
+    sigma_theta =  5 * (pi/180)
+    sigma_z = 5
+    #sigma_r = 50
+    #sigma_alpha = 15 * (pi/180)
+    #sigma_phi = 15 * (pi/180)
+    #sigma_theta =  5 * (pi/180)
+    #sigma_z = 50
     # sigma_r = 10
     # sigma_alpha = 5 * (pi/180)
     # sigma_phi = 15 * (pi/180)
@@ -615,7 +677,7 @@ class SLAMParticle(Particle):
         lm_x = self.x + dx
         lm_y = self.y + dy
 
-        if lm_id.startswith('ArucoMarker-') or lm_id.startswith('Wall-'):
+        if lm_id.startswith('ArucoMarker-') or lm_id.startswith('Wall-') or lm_id.startswith('AprilTag-'):
             lm_orient = wrap_angle(sensor_orient + self.theta)
         else:
             print('Unrecognized landmark type:',lm_id)
@@ -676,6 +738,10 @@ class SLAMParticle(Particle):
 
 class SLAMSensorModel(SensorModel):
     @staticmethod
+    def is_apriltag_landmark(x):
+        return isinstance(x, AprilTagObj)
+
+    @staticmethod
     def is_solo_aruco_landmark(x):
         return isinstance(x, ArucoMarkerObj)
 
@@ -688,7 +754,7 @@ class SLAMSensorModel(SensorModel):
         if landmarks is None:
             landmarks = dict()
         if landmark_test is None:
-            landmark_test = self.is_wall_landmark # self.is_solo_aruco_landmark
+            landmark_test = self.is_apriltag_landmark # self.is_wall_landmark
         self.landmark_test = landmark_test
         self.distance_variance = distance_variance
         super().__init__(robot,landmarks)
@@ -766,14 +832,14 @@ class SLAMSensorModel(SensorModel):
         rpose = self.robot.pose
         if not self.landmark_test(obj):
             return False
-        if isinstance(obj, (ArucoMarkerObj, WallObj)):
+        id = obj.id
+        if isinstance(obj, (AprilTagObj, ArucoMarkerObj, WallObj)):
             sensor_dist = obj.sensor_distance
             sensor_bearing = obj.sensor_bearing
             sensor_orient = obj.sensor_orient
         else:
             print("Don't know how to process landmark; id =",id)
 
-        id = obj.id
         if id not in self.landmarks:
             if self.pf.state == ParticleFilter.LOCALIZED:
                 print('  *** PF ADDING LANDMARK %s at:  distance=%6.1f  bearing=%5.1f deg.  orient=%5.1f deg.' %

@@ -291,6 +291,7 @@ class CliffDetectorOutput:
     cliff: Optional[CliffDetectionResult]
     segments: Sequence[CliffSegment]
     status: str
+    valid_mask_edges: Optional[np.ndarray] = None
 
     @property
     def has_confident_segment(self) -> bool:
@@ -591,6 +592,7 @@ class CliffDetector:
             cliff=cliff_result,
             segments=segments,
             status=status,
+            valid_mask_edges=valid_mask_edges,
         )
 
     # ------------------------------------------------------------------
