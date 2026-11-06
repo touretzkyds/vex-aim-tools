@@ -103,7 +103,6 @@ class OccupancyGridProvider(QQuickImageProvider):
         # Colors (R, G, B, A)
         COLOR_FREE = np.array([0, 255, 0, 100], dtype=np.uint8)      # Transparent Green
         COLOR_OCCUPIED = np.array([255, 0, 0, 200], dtype=np.uint8)  # Red
-        COLOR_CLIFF = np.array([255, 255, 0, 255], dtype=np.uint8)   # Yellow
         COLOR_UNKNOWN = np.array([50, 50, 50, 50], dtype=np.uint8)   # Light gray for debugging
         
         # Masks
@@ -126,7 +125,7 @@ class OccupancyGridProvider(QQuickImageProvider):
         rgba_view[mask_seen_unknown] = COLOR_UNKNOWN_SEEN
         rgba_view[mask_free] = COLOR_FREE
         rgba_view[mask_occupied] = COLOR_OCCUPIED
-        rgba_view[mask_cliff] = COLOR_CLIFF
+        # cliff_mask stays off this texture. The yellow CliffObj polyline is the cliff.
         if self._verbose and self._debug_prints < 5:
             print(f"[GridProvider] updated: occ={int(mask_occupied.sum())} free={int(mask_free.sum())} cliff={int(mask_cliff.sum())}")
             self._debug_prints += 1

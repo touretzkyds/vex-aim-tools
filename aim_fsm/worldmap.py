@@ -144,6 +144,45 @@ class ArucoMarkerObj(WorldObject):
             return f'<ArucoMarkerObj {self.marker_id}: position unknown>'
         
 
+class CliffObj(WorldObject):
+    """Detected drop-off stored as a ground polyline in world coordinates (mm)."""
+    #HERE, sets cliff size
+    HEIGHT_MM = 2.0
+    THICKNESS_MM = 2.5
+
+    def __init__(self, id, polyline_mm, confidence=1.0):
+        pts = np.asarray(polyline_mm, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[0] < 2:
+            raise ValueError("cliff polyline needs at least two points")
+        xy = np.ascontiguousarray(pts[:, :2], dtype=np.float64)
+        mid = xy.mean(axis=0)
+        delta = xy[-1] - xy[0]
+        theta = math.atan2(delta[1], delta[0])
+        diffs = np.diff(xy, axis=0)
+        length = float(np.sqrt((diffs ** 2).sum(axis=1)).sum())
+        super().__init__(
+            id=id,
+            name=id,
+            x=float(mid[0]),
+            y=float(mid[1]),
+            z=0.0,
+            theta=theta,
+            is_visible=True,
+            is_fixed=True,
+        )
+        self.polyline = xy
+        self.confidence = float(confidence)
+        self.length = length
+        self.height = self.HEIGHT_MM
+        self.thickness = self.THICKNESS_MM
+        self.is_obstacle = True
+
+    def __repr__(self):
+        vis = 'visible' if self.is_visible else 'unseen'
+        return (f'<CliffObj {self.id} ({self.pose.x:.1f}, {self.pose.y:.1f}) '
+                f'len={self.length:.1f}mm conf={self.confidence:.2f} {vis}>')
+
+
 class WallObj(WorldObject):
 
 
@@ -256,9 +295,10 @@ class WorldMap():
         self.last_held_time = -1
 
         # Phase 7: Occupancy Grid
+        #HERE is where size is set
         if OccupancyGrid:
             # Range 5000mm x 5000mm, Resolution 25mm (robust against depth noise)
-            self.occupancy_grid = OccupancyGrid(x_range=(-2500, 2500), y_range=(-2500, 2500), resolution=25.0)
+            self.occupancy_grid = OccupancyGrid(x_range=(-2500, 2500), y_range=(-2500, 2500), resolution=1.0)
         else:
             self.occupancy_grid = None
 
@@ -344,7 +384,7 @@ class WorldMap():
             import traceback
             traceback.print_exc()
             return False
-
+    #HERE, draws the occupancy grid
     def mark_cliff_on_grid(self, cliff_segments, robot_pose=None):
         """Mark cliff polylines on the occupancy grid.
 
@@ -385,9 +425,12 @@ class WorldMap():
                         w_pt = rotation.dot(pt_vec) + robot_pos
                         world_polyline.append((float(w_pt[0,0]), float(w_pt[1,0])))
 
-                    # Mark on grid
-                    self.occupancy_grid.mark_cliff_polyline(world_polyline, is_cliff=True)
-
+                    # Mark on grid, HERE, take position & confidence
+                    self.occupancy_grid.mark_cliff_polyline(
+                        world_polyline,
+                        (robot_pose[0], robot_pose[1]),
+                        weight=float(getattr(seg, "confidence", 1.0)),
+                    )
             return True
         except Exception as e:
             import logging
@@ -395,6 +438,25 @@ class WorldMap():
             import traceback
             traceback.print_exc()
             return False
+    #HERE, makes the rectangular cliff
+    def add_cliff(self, cliff_id, polyline_world_m, confidence=1.0):
+        """Insert or replace a cliff polyline as a WorldObject.
+
+        Args:
+            cliff_id: Unique object id (also used as the dict key).
+            polyline_world_m: (N, 2) or (N, 3) points in world frame, meters.
+            confidence: Detector confidence in [0, 1].
+
+        Returns:
+            CliffObj or None if the polyline is too short.
+        """
+        pts = np.asarray(polyline_world_m, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[0] < 2:
+            return None
+        obj = CliffObj(id=cliff_id, polyline_mm=pts * 1000.0, confidence=confidence)
+        with self._lock:
+            self.objects[cliff_id] = obj
+        return obj
 
     def pause_visibility(self, value=True):
         """Turn off visibility of objects when the robot is moving.  We won't
@@ -736,7 +798,7 @@ class WorldMap():
         MISSING_FRAME_THRESHOLD = 10
 
         for obj in self.objects.values():
-            if not isinstance(obj, (ArucoMarkerObj,WallObj,DoorwayObj)) and \
+            if not isinstance(obj, (ArucoMarkerObj, WallObj, DoorwayObj, CliffObj)) and \
                obj not in self.updated_objects and self.should_be_visible(obj):
 
                 # Phase 7: Two-tier ghost object elimination strategy

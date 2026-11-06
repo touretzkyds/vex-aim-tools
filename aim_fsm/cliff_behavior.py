@@ -32,16 +32,16 @@ except ImportError:
 _LOGGER = logging.getLogger(__name__)
 
 
-def _transform_polyline_to_world(robot, polyline_base_m: np.ndarray) -> np.ndarray:
+def _transform_polyline_to_world(pose, polyline_base_m: np.ndarray) -> np.ndarray:
     """Transform polyline from robot base frame to world frame.
 
     This function converts cliff edge coordinates from the robot's local reference
-    frame to global world coordinates, accounting for the robot's current position
-    and heading. This ensures cliff edges remain at fixed world positions even
-    when the robot moves.
+    frame to global world coordinates, accounting for the robot's position and
+    heading. This ensures cliff edges remain at fixed world positions even when
+    the robot moves.
 
     Args:
-        robot: Robot instance with pose (x, y in mm, theta in radians)
+        pose: (x, y, theta) robot pose when the frame was captured (mm, radians)
         polyline_base_m: (N, 3) array of points in robot base frame (meters)
 
     Returns:
@@ -49,9 +49,9 @@ def _transform_polyline_to_world(robot, polyline_base_m: np.ndarray) -> np.ndarr
     """
     from aim_fsm.geometry import aboutZ, point
 
-    # Get robot pose (in mm and radians)
-    rotation = aboutZ(robot.pose.theta)
-    robot_pos = point(robot.pose.x, robot.pose.y)
+    x, y, theta = pose
+    rotation = aboutZ(theta)
+    robot_pos = point(x, y)
 
     world_points = []
     for pt in polyline_base_m:
@@ -71,14 +71,142 @@ def _transform_polyline_to_world(robot, polyline_base_m: np.ndarray) -> np.ndarr
     return np.array(world_points)
 
 
+def _segment_centroid_xy(seg) -> Optional[tuple[float, float]]:
+    """Mean (x, y) of a segment's world polyline, or None if unusable."""
+    pw = getattr(seg, "polyline_world", None)
+    if pw is None or len(pw) < 2:
+        return None
+    pts = np.asarray(pw, dtype=np.float64)
+    return float(pts[:, 0].mean()), float(pts[:, 1].mean())
+
+
+def _segments_agree(
+    a,
+    b,
+    dist_abs: float = 0.04,
+    dist_rel: float = 0.25,
+    centroid_abs: float = 0.05,
+    centroid_rel: float = 0.15,
+) -> bool:
+    """True if two world-frame cliff segments describe the same edge."""
+    ca = _segment_centroid_xy(a)
+    cb = _segment_centroid_xy(b)
+    if ca is None or cb is None:
+        return False
+    cdist = float(np.hypot(ca[0] - cb[0], ca[1] - cb[1]))
+    cscale = 0.5 * (float(np.hypot(*ca)) + float(np.hypot(*cb)))
+    if cdist > max(centroid_abs, centroid_rel * cscale):
+        return False
+    da = a.distance_to_robot
+    db = b.distance_to_robot
+    if da is not None and db is not None:
+        if abs(da - db) > max(dist_abs, dist_rel * 0.5 * (abs(da) + abs(db))):
+            return False
+    return True
+
+
+def _best_world_segment(result, min_confidence: float = 0.2):
+    """Highest-confidence segment with a world polyline of at least two points."""
+    best = None
+    for seg in result.segments:
+        if seg.polyline_world is None or len(seg.polyline_world) < 2:
+            continue
+        if seg.confidence < min_confidence:
+            continue
+        if best is None or seg.confidence > best.confidence:
+            best = seg
+    return best
+
+
+def _select_consensus(transformed_results, min_confidence: float = 0.2):
+    """Keep the agreeing majority of frames and drop outliers / empty detections.
+
+    Returns (inlier_frame_indices, consensus_segment, per-frame notes).
+    consensus_segment is the typical inlier (median distance), not max confidence.
+    """
+    notes: list[str] = []
+    candidates: list[tuple[int, object]] = []
+    for i, result in enumerate(transformed_results):
+        seg = _best_world_segment(result, min_confidence)
+        if seg is None:
+            nseg = len(result.segments) if result.segments else 0
+            if nseg == 0:
+                notes.append(f"frame {i + 1}: ignored (no cliff)")
+            else:
+                notes.append(
+                    f"frame {i + 1}: ignored (no usable world polyline / conf < {min_confidence})"
+                )
+            continue
+        candidates.append((i, seg))
+
+    if not candidates:
+        return [], None, notes
+
+    if len(candidates) == 1:
+        i, seg = candidates[0]
+        d = seg.distance_to_robot
+        dtxt = f"{d:.3f}m" if d is not None else "n/a"
+        notes.append(
+            f"frame {i + 1}: kept (only usable detection, conf={seg.confidence:.2f}, dist={dtxt})"
+        )
+        return [i], seg, notes
+
+    best_inliers: set[int] = {0}
+    best_score = (-1, -1.0)
+    for s, (_si, sseg) in enumerate(candidates):
+        inliers = {s}
+        for t, (_ti, tseg) in enumerate(candidates):
+            if t != s and _segments_agree(sseg, tseg):
+                inliers.add(t)
+        score = (
+            len(inliers),
+            float(np.mean([candidates[k][1].confidence for k in inliers])),
+        )
+        if score > best_score:
+            best_inliers = inliers
+            best_score = score
+
+    inlier_indices: list[int] = []
+    inlier_segs = []
+    for s, (i, seg) in enumerate(candidates):
+        d = seg.distance_to_robot
+        dtxt = f"{d:.3f}m" if d is not None else "n/a"
+        if s in best_inliers:
+            inlier_indices.append(i)
+            inlier_segs.append(seg)
+            notes.append(
+                f"frame {i + 1}: kept (consensus, conf={seg.confidence:.2f}, dist={dtxt})"
+            )
+        else:
+            notes.append(
+                f"frame {i + 1}: ignored (outlier vs consensus, conf={seg.confidence:.2f}, dist={dtxt})"
+            )
+
+    if len(inlier_indices) < 2:
+        notes.append("consensus failed: detections did not agree")
+        return [], None, notes
+
+    dists = [s.distance_to_robot for s in inlier_segs]
+    if all(d is not None for d in dists):
+        median_d = float(np.median(np.asarray(dists, dtype=np.float64)))
+        consensus = min(inlier_segs, key=lambda s: abs(s.distance_to_robot - median_d))
+    else:
+        confs = [s.confidence for s in inlier_segs]
+        median_c = float(np.median(np.asarray(confs, dtype=np.float64)))
+        consensus = min(inlier_segs, key=lambda s: abs(s.confidence - median_c))
+
+    return inlier_indices, consensus, notes
+
+
 class DetectCliff(StateNode):
     """FSM behavior that captures N camera frames and runs cliff detection.
 
     This behavior:
     1. Captures multiple camera frames over ~1-2 seconds
     2. Runs cliff detection on each frame
-    3. Stores results in robot.cliff_results for worldmap visualization
-    4. Reports summary of detected cliffs
+    3. Takes consensus across frames (drops empty / outlier detections)
+    4. Stores inlier results in robot.cliff_results for worldmap visualization
+    5. Reports summary of detected cliffs
 
     Args:
         num_frames: Number of frames to capture (default: 5)
@@ -231,10 +359,11 @@ class DetectCliff(StateNode):
         """Worker method that runs in background thread to process frames.
 
         Returns:
-            Tuple of (results, total_segments, error_msg)
+            Tuple of (results, poses, total_segments, total_elapsed, error_msg)
         """
         try:
             results = []
+            poses = []
             total_segments = 0
             processing_start = time.time()
 
@@ -282,6 +411,7 @@ class DetectCliff(StateNode):
                     )
 
                     results.append(result)
+                    poses.append(pose)
                     num_segments = len(result.segments)
                     total_segments += num_segments
 
@@ -324,13 +454,13 @@ class DetectCliff(StateNode):
                     self._save_frame(frame, i)
 
             total_elapsed = time.time() - processing_start
-            return (results, total_segments, total_elapsed, None)
+            return (results, poses, total_segments, total_elapsed, None)
 
         except Exception as exc:
             # Fatal error in worker
             import traceback
             error_msg = f"Fatal error in background processing: {exc}\n{traceback.format_exc()}"
-            return ([], 0, 0, error_msg)
+            return ([], [], 0, 0, error_msg)
 
     def _check_processing_done(self):
         """Check if background processing is complete (called from event loop)."""
@@ -346,7 +476,7 @@ class DetectCliff(StateNode):
 
         # Processing complete! Get results
         try:
-            results, total_segments, processing_time, error_msg = self._processing_future.result(timeout=0.1)
+            results, poses, total_segments, processing_time, error_msg = self._processing_future.result(timeout=0.1)
 
             if error_msg:
                 # Fatal error occurred
@@ -358,19 +488,22 @@ class DetectCliff(StateNode):
             # Store results in robot for worldmap viewer
             # NEW: Accumulate multiple detection sessions instead of overwriting
             timestamp = time.time()
+            session_id = f"cliff_{int(timestamp * 1000)}"
+            world_map = getattr(self.robot, "world_map", None)
+            raw_results = results
 
             # Transform all polylines from base frame to world frame
-            # This ensures cliffs stay at fixed world positions when robot moves
+            # This ensures cliffs stay at fixed world positions even when the robot moves.
             # Note: CliffSegment and CliffDetectionResult are frozen dataclasses,
             # so we need to create new instances
             transformed_results = []
-            for result in results:
+            for result, pose in zip(raw_results, poses):
                 transformed_segments = []
                 for seg in result.segments:
                     if seg.polyline_world is not None:
                         # Create new segment with transformed coordinates
                         transformed_polyline = _transform_polyline_to_world(
-                            self.robot, seg.polyline_world
+                            pose, seg.polyline_world
                         )
                         new_seg = dataclasses.replace(seg, polyline_world=transformed_polyline)
                         transformed_segments.append(new_seg)
@@ -380,20 +513,58 @@ class DetectCliff(StateNode):
                 new_result = dataclasses.replace(result, segments=transformed_segments)
                 transformed_results.append(new_result)
 
-            # Use transformed results for storage
-            results = transformed_results
+            inlier_indices, consensus_seg, consensus_notes = _select_consensus(
+                transformed_results
+            )
+            _LOGGER.info("Consensus across %d frames:", len(transformed_results))
+            for note in consensus_notes:
+                _LOGGER.info("  %s", note)
+            sys.stdout.flush()
+
+            # Occupancy grid expects base-frame meters and applies pose itself.
+            # Stamp only consensus inliers so outlier frames do not pollute the map.
+            #HERE
+            polyline = None
+            if world_map is not None:
+                grid = world_map.occupancy_grid
+                if grid is not None:
+                    from perception.cliff_grid_debug import CliffGridDebug
+                    grid.on_cliff_debug = CliffGridDebug()
+                try:
+                    for i, result in enumerate(raw_results):
+                        world_map.mark_cliff_on_grid(result.segments, robot_pose=poses[i])
+                    if grid is not None:
+                        polyline = grid.extract_cliff_polyline_m()
+                    if polyline is not None:
+                        world_map.add_cliff("cliff", polyline, confidence=1.0)
+                finally:
+                    if grid is not None:
+                        grid.on_cliff_debug = None
+
+            overlay_results = (
+                [transformed_results[i] for i in inlier_indices]
+                if inlier_indices
+                else []
+            )
 
             session = {
-                "id": f"cliff_{int(timestamp * 1000)}",  # Unique ID based on timestamp
+                "id": session_id,
                 "timestamp": timestamp,
                 "robot_pose": {  # Save robot pose at detection time
                     "x": float(self.robot.pose.x),
                     "y": float(self.robot.pose.y),
                     "theta": float(self.robot.pose.theta),
                 },
-                "results": results,
-                "num_frames": len(results),
+                "results": transformed_results, #HERE, changed overlay
+                "overlay_results": None,
+                "num_frames": len(transformed_results),
                 "total_segments": total_segments,
+                "consensus_frames": [i + 1 for i in inlier_indices],
+                "rejected_frames": [
+                    i + 1
+                    for i in range(len(transformed_results))
+                    if i not in set(inlier_indices)
+                ],
             }
 
             # Initialize cliff history if needed
@@ -403,18 +574,25 @@ class DetectCliff(StateNode):
             # Append new session (accumulate, don't overwrite)
             self.robot.cliff_sessions.append(session)
 
-            # Also keep backward compatibility with old single-session format
-            self.robot.cliff_results = results
+            # Overlay / planner see inliers only; full per-frame dump stays in cliff_sessions
+            self.robot.cliff_results = None
             self.robot.cliff_timestamp = timestamp
-            self.robot.cliff_num_frames = len(results)
+            self.robot.cliff_num_frames = 0
 
             total_elapsed = time.time() - self.start_time
             _LOGGER.info(f"\nCliff detection complete! ({total_elapsed:.1f}s total, {processing_time:.1f}s processing)")
-            _LOGGER.info(f"Total segments detected: {total_segments} across {len(results)} frames")
+            _LOGGER.info(
+                f"Total segments detected: {total_segments} across {len(transformed_results)} frames "
+                f"({len(inlier_indices)} consensus inliers)"
+            )
             sys.stdout.flush()
 
-            if total_segments > 0:
-                self.post_success(details={"num_segments": total_segments, "num_frames": len(results)})
+            if consensus_seg is not None:
+                self.post_success(details={
+                    "num_segments": total_segments,
+                    "num_frames": len(transformed_results),
+                    "consensus_frames": len(inlier_indices),
+                })
             else:
                 self.post_completion()
 
@@ -464,12 +642,20 @@ class DetectCliff(StateNode):
         camera = getattr(self.robot, "camera", None)
         calibration = load_cliff_calibration(camera)
 
+        # Use the same camera pose (camera_tilt in aim_kin.py) that places barrels
+        # and other objects, so cliffs and objects share one ground projection.
+        extrinsics = calibration.camera_to_base
+        kine = getattr(self.robot, "kine", None)
+        if kine is not None:
+            extrinsics = np.array(kine.joint_to_base('camera'), dtype=np.float32)
+            extrinsics[:3, 3] /= 1000.0  # kinematics is in mm; the detector works in meters
+
         # Create detector
         detector = CliffDetector(
             depth_provider=provider,
             intrinsics=calibration.intrinsics,
             gravity_camera=calibration.gravity_camera,
-            extrinsics=calibration.camera_to_base,
+            extrinsics=extrinsics,
         )
 
         return detector

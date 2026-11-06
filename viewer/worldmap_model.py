@@ -12,6 +12,7 @@ from aim_fsm.worldmap import (
     ArucoMarkerObj,
     BarrelObj,
     BlueBarrelObj,
+    CliffObj,
     OrangeBarrelObj,
     SportsBallObj,
     WallObj,
@@ -134,14 +135,21 @@ class WorldMapModel(QAbstractListModel):
         else:
             iterator = objects  # assume iterable of pairs
 
+        has_cliff_obj = False
         for key, obj in sorted(iterator, key=lambda pair: str(pair[0])):  # type: ignore[arg-type]
+            if isinstance(obj, CliffObj):
+                has_cliff_obj = True
+                entries.extend(self._items_from_cliff_obj(str(key), obj))
+                continue
             item = self._build_object(str(key), obj)
             if item is not None:
                 entries.append(item)
 
-        # Add cliff edges from cliff detection results
-        cliff_items = self._build_cliff_edges(robot)
-        entries.extend(cliff_items)
+        # Fallback for detections that only live on robot.cliff_sessions
+        if not has_cliff_obj:
+            #entries.extend(self._build_cliff_edges(robot))
+            #HERE, remove the cliff_edges
+            pass
 
         # Debug: print model update info (only on changes)
         cliff_sessions = getattr(robot, "cliff_sessions", None)
@@ -306,7 +314,7 @@ class WorldMapModel(QAbstractListModel):
             # Render all sessions
             for session_idx, session in enumerate(cliff_sessions):
                 session_id = session.get("id", f"session_{session_idx}")
-                cliff_results = session.get("results", [])
+                cliff_results = session.get("overlay_results") or session.get("results", [])
                 session_items = self._build_session_cliff_edges(
                     cliff_results, session_id, session_idx
                 )
@@ -320,6 +328,69 @@ class WorldMapModel(QAbstractListModel):
 
         cliff_items = self._build_session_cliff_edges(cliff_results, "cliff_0", 0)
         return cliff_items
+    #HERE, makes the rectangular cliff by dividng into cubes with the width and height of the cliff
+    def _items_from_cliff_obj(self, object_id: str, obj: CliffObj) -> list[Item]:
+        """Expand a CliffObj polyline into thin wall cubes for QML."""
+        return self._items_from_polyline(
+            object_id,
+            obj.polyline,
+            height_mm=float(getattr(obj, "height", 1.5)),
+            thickness_mm=float(getattr(obj, "thickness", 15.0)),
+        )
+
+    @staticmethod
+    def _items_from_polyline(
+        object_id: str,
+        polyline_mm,
+        height_mm: float = 1.5,
+        thickness_mm: float = 15.0,
+    ) -> list[Item]:
+        """Sample a world-frame polyline (mm) into wall-type viewer items."""
+        import math
+        import numpy as np
+
+        pts = np.asarray(polyline_mm, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[0] < 2:
+            return []
+        if pts.shape[1] == 2:
+            z = np.zeros((pts.shape[0], 1), dtype=np.float64)
+            pts = np.hstack([pts, z])
+
+        sample_step = 1 #changed from max(1, len(pts) // 25) to 1 to sample every point
+        sampled_indices = list(range(0, len(pts), sample_step))
+        if sampled_indices[-1] != len(pts) - 1:
+            sampled_indices.append(len(pts) - 1)
+
+        items: list[Item] = []
+        for i in range(len(sampled_indices) - 1):
+            p1 = pts[sampled_indices[i]]
+            p2 = pts[sampled_indices[i + 1]]
+            dx = float(p2[0] - p1[0])
+            dy = float(p2[1] - p1[1])
+            dz = float(p2[2] - p1[2])
+            length_mm = float(math.sqrt(dx * dx + dy * dy + dz * dz))
+            if length_mm < 0.1:
+                continue
+            items.append(
+                {
+                    "id": f"{object_id}_{i}",
+                    "type": "wall",
+                    "x": float((p1[0] + p2[0]) / 2.0),
+                    "y": float((p1[1] + p2[1]) / 2.0),
+                    "z": float((p1[2] + p2[2]) / 2.0) + height_mm / 2.0,
+                    "theta": float(math.atan2(dy, dx)) + math.pi/2.0, #HERE, changed
+                    "visible": True,
+                    "missing": False,
+                    "diameter_mm": None,
+                    "height_mm": height_mm,
+                    "length_mm": length_mm,
+                    "thickness_mm": thickness_mm,
+                    "size_mm": None,
+                    "marker_id": None,
+                    "holding": None,
+                }
+            )
+        return items
 
     def _build_session_cliff_edges(
         self, cliff_results: list, session_id: str, session_idx: int
@@ -331,7 +402,6 @@ class WorldMapModel(QAbstractListModel):
             return cliff_items
 
         import numpy as np
-        import math
 
         # Check if this session was already logged (avoid spam on every refresh)
         if not hasattr(self, "_logged_sessions"):
@@ -357,84 +427,20 @@ class WorldMapModel(QAbstractListModel):
             if segment.polyline_world is None:
                 continue
 
-            # Convert polyline from meters to millimeters
-            polyline_m = segment.polyline_world
-            polyline_mm = polyline_m * 1000.0  # Convert to mm
-
-            # Debug: print polyline stats ONLY for new sessions (not on every refresh)
+            polyline_mm = segment.polyline_world * 1000.0
             if is_new_session and seg_idx == 0:
-                total_length = 0.0
-                for i in range(len(polyline_mm) - 1):
-                    dx = polyline_mm[i+1, 0] - polyline_mm[i, 0]
-                    dy = polyline_mm[i+1, 1] - polyline_mm[i, 1]
-                    dz = polyline_mm[i+1, 2] - polyline_mm[i, 2]
-                    total_length += math.sqrt(dx**2 + dy**2 + dz**2)
-                avg_step = total_length / (len(polyline_mm) - 1) if len(polyline_mm) > 1 else 0
+                import numpy as np
+                diffs = np.diff(np.asarray(polyline_mm, dtype=np.float64), axis=0)
+                total_length = float(np.sqrt((diffs ** 2).sum(axis=1)).sum()) if len(diffs) else 0.0
+                avg_step = total_length / max(len(polyline_mm) - 1, 1)
                 print(f"  Session {session_idx} (NEW): Polyline {len(polyline_mm)} points, length={total_length:.1f}mm, avg step={avg_step:.2f}mm")
 
-            # Flat red line rendering - thin horizontal segments
-            # Sample every Nth point to create line segments
-            # Aim for ~20-30 segments for smooth line without too many objects
-            sample_step = max(20, len(polyline_mm) // 25)  # At most 25 segments
-            sampled_indices = list(range(0, len(polyline_mm), sample_step))
-            if sampled_indices[-1] != len(polyline_mm) - 1:
-                sampled_indices.append(len(polyline_mm) - 1)  # Always include last point
-
-            # Build flat line segments between sampled points
-            for i in range(len(sampled_indices) - 1):
-                idx1 = sampled_indices[i]
-                idx2 = sampled_indices[i + 1]
-
-                p1 = polyline_mm[idx1]
-                p2 = polyline_mm[idx2]
-
-                # Calculate segment midpoint (x, y, z)
-                # CRITICAL: Convert to Python float, not numpy float!
-                mid_x = float((p1[0] + p2[0]) / 2.0)
-                mid_y = float((p1[1] + p2[1]) / 2.0)
-                mid_z = float((p1[2] + p2[2]) / 2.0)
-
-                # Calculate segment length
-                dx = p2[0] - p1[0]
-                dy = p2[1] - p1[1]
-                dz = p2[2] - p1[2]
-                length_mm = float(math.sqrt(dx**2 + dy**2 + dz**2))
-
-                # Skip degenerate segments
-                if length_mm < 0.1:
-                    continue
-
-                # Calculate rotation angle (theta) in xy plane
-                theta_rad = float(math.atan2(dy, dx))
-
-                # Ultra-flat red line parameters
-                height_mm = 1.5   # 1.5mm height - VERY thin, almost flat
-                thickness_mm = 15.0  # 15mm width - visible but not too thick
-
-                # Cube is centered, lift by height/2 to sit on ground
-                z_position = mid_z + height_mm / 2.0
-
-                # Create a cliff line segment
-                cliff_id = f"{session_id}_seg{seg_idx}_{i}"
-                item: Item = {
-                    "id": cliff_id,
-                    "type": "wall",  # Use wall type (cube-based)
-                    "x": mid_x,
-                    "y": mid_y,
-                    "z": z_position,
-                    "theta": theta_rad,
-                    "visible": True,
-                    "missing": False,
-                    "diameter_mm": None,
-                    "height_mm": height_mm,
-                    "length_mm": length_mm,
-                    "thickness_mm": thickness_mm,
-                    "size_mm": None,
-                    "marker_id": None,
-                    "holding": None,
-                }
-
-                cliff_items.append(item)
+            cliff_items.extend(
+                self._items_from_polyline(
+                    f"{session_id}_seg{seg_idx}",
+                    polyline_mm,
+                )
+            )
 
         # Debug: print session summary ONLY for new sessions
         if is_new_session and cliff_items:
@@ -466,6 +472,8 @@ class WorldMapModel(QAbstractListModel):
             return "aruco"
         if isinstance(obj, WallObj):
             return "wall"
+        if isinstance(obj, CliffObj):
+            return "cliff"
         name = getattr(obj, "name", "")
         if isinstance(name, str):
             lower = name.lower()

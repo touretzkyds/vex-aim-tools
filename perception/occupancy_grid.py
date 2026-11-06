@@ -69,6 +69,8 @@ class OccupancyGrid:
     SCALE_EMA_ALPHA = 0.2
     INVERT_DEPTH_ON_FAIL = True
 
+
+
     # Default sampling parameters (Method 1): fixed-budget rays with uniform
     # horizontal coverage and ground-focused vertical ROI.
     DEFAULT_SAMPLING = "bearing_bins"  # or "stride"
@@ -104,6 +106,8 @@ class OccupancyGrid:
         # Shape is (height, width) -> (y, x)
         self.log_odds = np.zeros((self.height, self.width), dtype=np.float32)
 
+        self.cliff_log_odds = np.zeros((self.height, self.width), dtype=np.float32)
+
         # Observed mask: True once a cell has been traversed/updated by a ray.
         # This distinguishes "unseen unknown" from "seen but uncertain".
         self.observed = np.zeros((self.height, self.width), dtype=bool)
@@ -129,6 +133,7 @@ class OccupancyGrid:
         # Change notification for viewers
         self.version = 0
         self.on_update = None
+        self.on_cliff_debug = None
         self._depth_scale_ema = 1.0
 
         print(f"Occupancy Grid Initialized: {self.width}x{self.height} cells, "
@@ -194,43 +199,258 @@ class OccupancyGrid:
             updated = True
         if updated:
             self._notify_update()
+    #HERE, from before, draws the polyline makes it into a cliff_mask, note name for now is polyline but is log_odds
+    def mark_cliff_polyline(self, polyline_world, robot_xy, weight=1.0):
+        weight = float(weight)
+        pts = np.asarray(polyline_world, dtype=float)
+        rx, ry = float(robot_xy[0]), float(robot_xy[1])
+        if weight <= 0.0 or len(pts) < 2 or self.world_to_grid(rx, ry)[0] < 0:
+            return
 
-    def mark_cliff_polyline(self, polyline_world: list[tuple[float, float]], is_cliff: bool = True):
-        """
-        Rasterize a world-space polyline onto the cliff mask.
-        Args:
-            polyline_world: List of (x, y) points in mm.
-            is_cliff: True to mark as cliff, False to clear.
-        """
-        updated = False
-        with self._lock:
-            if len(polyline_world) < 2:
-                return
+        safe = np.zeros((self.height, self.width), dtype=bool)
+        drop = np.zeros_like(safe)
 
-            for i in range(len(polyline_world) - 1):
-                p1 = polyline_world[i]
-                p2 = polyline_world[i+1]
-                
-                x1, y1 = p1
-                x2, y2 = p2
-                
-                dist = math.hypot(x2 - x1, y2 - y1)
-                if dist < 1e-3:
+        def paint(mask, x0, y0, x1, y1, include_end=False):
+            dist = math.hypot(x1 - x0, y1 - y0)
+            intervals = max(int(np.ceil(dist / self.resolution)), 1)
+            count = intervals + 1 if include_end else intervals
+            for x, y in zip(np.linspace(x0, x1, count, endpoint=include_end),
+                            np.linspace(y0, y1, count, endpoint=include_end)):
+                gx, gy = self.world_to_grid(float(x), float(y))
+                if gx >= 0:
+                    mask[gy, gx] = True
+
+        for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+            n = max(int(np.ceil(math.hypot(x2 - x1, y2 - y1) / self.resolution)), 1) + 1
+            for x, y in zip(np.linspace(x1, x2, n), np.linspace(y1, y2, n)):
+                dx, dy = x - rx, y - ry
+                dist = math.hypot(dx, dy)
+                if dist < self.resolution:
                     continue
-                    
-                # Interpolate points every 0.5 * resolution to ensure no gaps
-                steps = int(np.ceil(dist / (self.resolution * 0.5)))
-                
-                xs = np.linspace(x1, x2, steps)
-                ys = np.linspace(y1, y2, steps)
-                
-                for x, y in zip(xs, ys):
-                    gx, gy = self.world_to_grid(x, y)
-                    if gx != -1:
-                        self.cliff_mask[gy, gx] = is_cliff
-                        updated = True
-        if updated:
-            self._notify_update()
+                ux, uy = dx / dist, dy / dist
+                paint(safe, rx, ry, x, y, include_end=True)
+                paint(drop, x, y, x + ux * 80.0, y + uy * 80.0)
+
+        with self._lock:
+            self.cliff_log_odds[safe & ~drop] += weight * self.LO_FREE
+            self.cliff_log_odds[drop] += weight * self.LO_OCCUPIED
+            np.clip(self.cliff_log_odds, self.LO_MIN, self.LO_MAX, out=self.cliff_log_odds)
+            self.cliff_mask[:] = self.cliff_log_odds > self.LO_THRESH_OCC
+        self._emit_cliff_debug(
+            "paint",
+            safe=safe,
+            drop=drop,
+            weight=weight,
+            robot_xy=(rx, ry),
+        )
+
+    def extract_cliff_polyline_m(self):
+        import cv2
+        with self._lock:
+            score = self.cliff_log_odds.copy()
+        safe = score < 0
+        touch = np.zeros_like(safe)
+        touch[1:, :] |= safe[:-1, :]
+        touch[:-1, :] |= safe[1:, :]
+        touch[:, 1:] |= safe[:, :-1]
+        touch[:, :-1] |= safe[:, 1:]
+        edge = (score > 0) & touch
+        with self._lock:
+            self.cliff_mask[:] = edge
+
+        cnts, _ = cv2.findContours(edge.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        if not cnts:
+            self._emit_cliff_debug(
+                "extract",
+                edge=edge,
+                chains=[],
+                runs=[],
+                fitted=[],
+                bridged=[],
+                polyline_mm=None,
+            )
+            return None
+
+        def to_mm(index_pts):
+            return np.array([self.grid_to_world(int(gx), int(gy)) for gx, gy in index_pts])
+
+        def open_chain(cnt):
+            """One trip along a contour. The walk comes back on the other side."""
+            pts = cnt[:, 0, :]
+            if len(pts) < 2:
+                return None
+            j = int(np.argmax(np.sum((pts - pts[0]) ** 2, axis=1)))
+            i = int(np.argmax(np.sum((pts - pts[j]) ** 2, axis=1)))
+            if i > j:
+                i, j = j, i
+            forward = pts[i:j + 1]
+            backward = np.vstack((pts[j:], pts[:i + 1]))
+            chain = forward if len(forward) <= len(backward) else backward
+            return to_mm(chain)
+
+        def split_runs(chain, corner_deg=35.0, window_mm=25.0, min_run_mm=20.0):
+            """Cut the chain where its heading turns. Each piece stays straight."""
+            if len(chain) < 2:
+                return []
+            runs = []
+            start = 0
+            heading = None
+            for i in range(1, len(chain)):
+                window = i
+                walked = 0.0
+                while window > start and walked < window_mm:
+                    walked += float(np.hypot(*(chain[window] - chain[window - 1])))
+                    window -= 1
+                direction = chain[i] - chain[window]
+                norm = float(np.hypot(*direction))
+                if norm < 1.0:
+                    continue
+                direction = direction / norm
+                if heading is None:
+                    if float(np.hypot(*(chain[i] - chain[start]))) >= window_mm:
+                        heading = direction
+                    continue
+                ang = np.degrees(np.arccos(float(np.clip(np.dot(heading, direction), -1.0, 1.0))))
+                if ang > corner_deg:
+                    runs.append(chain[start:i])
+                    start = max(i - 1, 0)
+                    heading = None
+            runs.append(chain[start:])
+            kept = []
+            for run in runs:
+                if len(run) >= 2 and float(np.hypot(*(run[-1] - run[0]))) >= min_run_mm:
+                    kept.append(run)
+            return kept
+
+        def fit_segment(run):
+            """Straight segment spanning every cell in the run."""
+            center = run.mean(axis=0)
+            _, _, vt = np.linalg.svd(run - center, full_matrices=False)
+            direction = vt[0]
+            proj = (run - center) @ direction
+            return center + proj.min() * direction, center + proj.max() * direction
+
+        def segment_angle(a, b):
+            ua, ub = a[1] - a[0], b[1] - b[0]
+            na, nb = float(np.hypot(*ua)), float(np.hypot(*ub))
+            if na < 1.0 or nb < 1.0:
+                return 180.0
+            return np.degrees(np.arccos(float(np.clip(abs(np.dot(ua / na, ub / nb)), -1.0, 1.0))))
+
+        def bridge(segments, gap_mm=80.0, ang_deg=18.0, lateral_mm=20.0):
+            """Join breaks that lie on the same straight edge. Leave corners alone."""
+            segs = [tuple(s) for s in segments]
+            changed = True
+            while changed and len(segs) > 1:
+                changed = False
+                for i in range(len(segs)):
+                    for j in range(i + 1, len(segs)):
+                        if segment_angle(segs[i], segs[j]) > ang_deg:
+                            continue
+                        ua = segs[i][1] - segs[i][0]
+                        ua = ua / max(float(np.hypot(*ua)), 1.0)
+                        best = None
+                        for ei in (0, 1):
+                            for ej in (0, 1):
+                                gap_vec = segs[j][ej] - segs[i][ei]
+                                gap = float(np.hypot(*gap_vec))
+                                lateral = abs(ua[0] * gap_vec[1] - ua[1] * gap_vec[0])
+                                if best is None or gap < best[0]:
+                                    best = (gap, lateral)
+                        if best[0] <= gap_mm and best[1] <= lateral_mm:
+                            merged = fit_segment(np.stack([
+                                segs[i][0], segs[i][1], segs[j][0], segs[j][1],
+                            ]))
+                            segs = [s for k, s in enumerate(segs) if k != i and k != j]
+                            segs.append(merged)
+                            changed = True
+                            break
+                    if changed:
+                        break
+            return segs
+
+        def assemble(segments, join_mm=25.0):
+            """Connect runs that meet, including a corner, into polylines."""
+            segs = [[np.array(s[0], dtype=float), np.array(s[1], dtype=float)] for s in segments]
+            used = [False] * len(segs)
+            polylines = []
+            for s in range(len(segs)):
+                if used[s]:
+                    continue
+                used[s] = True
+                poly = [segs[s][0], segs[s][1]]
+                grew = True
+                while grew:
+                    grew = False
+                    for i, seg in enumerate(segs):
+                        if used[i]:
+                            continue
+                        attached = False
+                        for end_at_tail, end in ((True, poly[-1]), (False, poly[0])):
+                            for k in (0, 1):
+                                if float(np.hypot(*(seg[k] - end))) > join_mm:
+                                    continue
+                                other = seg[1 - k]
+                                if end_at_tail:
+                                    poly.append(other)
+                                else:
+                                    poly.insert(0, other)
+                                used[i] = True
+                                grew = True
+                                attached = True
+                                break
+                            if attached:
+                                break
+                        if attached:
+                            break
+                cleaned = [poly[0]]
+                for pt in poly[1:]:
+                    if float(np.hypot(*(pt - cleaned[-1]))) >= 1.0:
+                        cleaned.append(pt)
+                if len(cleaned) >= 2:
+                    polylines.append(np.array(cleaned))
+            if not polylines:
+                return None
+            def path_len(poly):
+                step = np.diff(poly, axis=0)
+                return float(np.hypot(step[:, 0], step[:, 1]).sum())
+            return max(polylines, key=path_len)
+
+        chains = []
+        runs = []
+        segments = []
+        for cnt in cnts:
+            chain = open_chain(cnt)
+            if chain is None:
+                continue
+            chains.append(chain)
+            for run in split_runs(chain):
+                runs.append(run)
+                segments.append(fit_segment(run))
+        fitted = list(segments)
+        bridged = bridge(segments) if segments else []
+        polyline = assemble(bridged) if bridged else None
+        self._emit_cliff_debug(
+            "extract",
+            edge=edge,
+            chains=chains,
+            runs=runs,
+            fitted=fitted,
+            bridged=bridged,
+            polyline_mm=polyline,
+        )
+        if polyline is None or len(polyline) < 2:
+            return None
+        return polyline / 1000.0
+
+    def _emit_cliff_debug(self, stage, **payload):
+        callback = self.on_cliff_debug
+        if callback is None:
+            return
+        try:
+            callback(self, stage, payload)
+        except Exception:
+            _LOGGER.exception("cliff debug image failed")
 
     def set_latest_cliff_polylines(self, polylines):
         """Replace the 'currently detected' cliff polylines (world frame, mm)."""
@@ -349,6 +569,7 @@ class OccupancyGrid:
             self.log_odds.fill(0)
             self.observed.fill(False)
             self.cliff_mask.fill(False)
+            self.cliff_log_odds.fill(0)
         self._notify_update()
 
     def update_from_depth(self, 

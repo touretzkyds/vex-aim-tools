@@ -8,7 +8,7 @@ from math import nan, isnan
 from .geometry import wrap_angle
 
 from .rrt_shapes import *
-from .worldmap import BarrelObj, SportsBallObj, AprilTagObj, ArucoMarkerObj, WallObj, DoorwayObj
+from .worldmap import BarrelObj, SportsBallObj, AprilTagObj, ArucoMarkerObj, WallObj, DoorwayObj, CliffObj
 from .aruco import ARUCO_MARKER_SIZE
 
 # *** TODO: Collision checking needs to use opposite headings
@@ -544,6 +544,10 @@ class RRT():
                 obsts = self.generate_wall_obstacles(obj, obstacle_inflation, doorway_adjustment)
                 obstacles += obsts
                 obst = None
+            elif isinstance(obj, CliffObj):
+                obsts = self.generate_cliff_obstacles(obj, obstacle_inflation)
+                obstacles += obsts
+                obst = None
             elif isinstance(obj, ArucoMarkerObj):
                 obst = self.generate_aruco_obstacle(obj, obstacle_inflation)
             elif isinstance(obj, DoorwayObj):
@@ -595,6 +599,38 @@ class RRT():
                           dimensions=dimensions,
                           orient=wall.pose.theta )
             r.obstacle_id = wall.id
+            obst.append(r)
+        return obst
+
+    @staticmethod
+    def generate_cliff_obstacles(cliff, obstacle_inflation):
+        """Thin rectangles along a cliff polyline (world mm)."""
+        pts = np.asarray(getattr(cliff, "polyline", []), dtype=float)
+        if pts.ndim != 2 or pts.shape[0] < 2:
+            return []
+        thickness = float(getattr(cliff, "thickness", 15.0)) + 2 * obstacle_inflation
+        sample_step = 1 #changed from max(1, len(pts) // 25) to 1 to sample every point
+        indices = list(range(0, len(pts), sample_step))
+        if indices[-1] != len(pts) - 1:
+            indices.append(len(pts) - 1)
+
+        obst = []
+        for i in range(len(indices) - 1):
+            p1 = pts[indices[i]]
+            p2 = pts[indices[i + 1]]
+            dx = float(p2[0] - p1[0])
+            dy = float(p2[1] - p1[1])
+            length = math.hypot(dx, dy)
+            if length < 1.0:
+                continue
+            # Match wall convention: local X is through the obstacle, local Y along it.
+            theta = math.atan2(dy, dx) + pi / 2
+            r = Rectangle(
+                center=geometry.point((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0),
+                dimensions=(thickness, length + 2 * obstacle_inflation),
+                orient=theta,
+            )
+            r.obstacle_id = cliff.id
             obst.append(r)
         return obst
 
